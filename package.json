@@ -1,0 +1,14 @@
+{
+  "name": "api-load-lab",
+  "private": true,
+  "workspaces": [
+    "services/target-api",
+    "services/control-api"
+  ],
+  "scripts": {
+    "dev:target": "npm run dev --workspace services/target-api",
+    "dev:worker": "npm run dev:worker --workspace services/target-api",
+    "dev:control": "npm run dev --workspace services/control-api",
+    "build": "npm run build --workspace services/target-api && npm run build --workspace services/control-api"
+  }
+}
