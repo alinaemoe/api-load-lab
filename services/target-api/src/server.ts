@@ -27,6 +27,11 @@ app.get("/healthz", async () => ({ ok: true }));
 
 app.get("/admin/state", async () => ({ toggles }));
 
+app.get("/admin/queue", async () => {
+  const c = await lookupQueue.getJobCounts("waiting", "active", "delayed");
+  return { waiting: c.waiting + c.delayed, active: c.active };
+});
+
 app.post<{ Body: Partial<Toggles> }>("/admin/toggles", async (req) => {
   const body = req.body || {};
   if (typeof body.cache === "boolean") toggles.cache = body.cache;

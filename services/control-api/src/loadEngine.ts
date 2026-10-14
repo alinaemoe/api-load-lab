@@ -21,6 +21,8 @@ type Tick = {
   hitRatio: number;
   dropRate: number;
   inFlight: number;
+  queueDepth: number;
+  queueActive: number;
   cost: number;
   breakdown: Record<string, number>;
   toggles: Toggles;
@@ -154,14 +156,31 @@ export class LoadEngine {
     return s[Math.min(s.length - 1, Math.floor(s.length * p))];
   }
 
-  private flushSecond() {
-    const totalIn = this.secBucket.done + this.secBucket.err + this.secBucket.drop;
+  private async fetchQueueStats() {
+    if (!this.toggles.queue) return { waiting: 0, active: 0 };
+    try {
+      const res = await fetch(`${this.targetUrl}/admin/queue`, {
+        signal: AbortSignal.timeout(800),
+      });
+      if (res.ok) return (await res.json()) as { waiting: number; active: number };
+    } catch {
+      // target busy or unreachable — report an empty queue for this tick
+    }
+    return { waiting: 0, active: 0 };
+  }
+
+  private async flushSecond() {
+    const bucket = this.secBucket;
+    this.secBucket = { done: 0, err: 0, drop: 0, hit: 0 };
+    this.eventCount = 0;
+    const q = await this.fetchQueueStats();
+    const totalIn = bucket.done + bucket.err + bucket.drop;
     const latencies = this.samples.slice(-400).map((s) => s.ms);
     const p50 = this.percentile(latencies, 0.5);
     const p95 = this.percentile(latencies, 0.95);
     const p99 = this.percentile(latencies, 0.99);
-    const err = totalIn ? (this.secBucket.err / totalIn) * 100 : 0;
-    const dropRate = totalIn ? (this.secBucket.drop / totalIn) * 100 : 0;
+    const err = totalIn ? (bucket.err / totalIn) * 100 : 0;
+    const dropRate = totalIn ? (bucket.drop / totalIn) * 100 : 0;
 
     // simulated infra cost model — not real billing, just a stand-in for
     // "what would the toggled components cost at this throughput"
@@ -180,15 +199,14 @@ export class LoadEngine {
       p50,
       p95,
       p99,
-      hitRatio: this.secBucket.done ? this.secBucket.hit / this.secBucket.done : 0,
+      hitRatio: bucket.done ? bucket.hit / bucket.done : 0,
       dropRate,
       inFlight: this.inFlight,
+      queueDepth: q.waiting,
+      queueActive: q.active,
       cost,
       breakdown: { compute, cache: cacheCost, queue: queueCost, index: idxCost, database: dbCost },
       toggles: { ...this.toggles },
     });
-
-    this.secBucket = { done: 0, err: 0, drop: 0, hit: 0 };
-    this.eventCount = 0;
   }
 }

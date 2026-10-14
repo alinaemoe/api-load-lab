@@ -321,6 +321,7 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
       var disabled = n.toggle && !state.toggles[n.toggle];
       state.nodeLoad[n.k] *= 0.93;
       var load = clamp(state.nodeLoad[n.k]/3,0,1.3);
+      if(n.k==='queue' && !disabled) load = Math.max(load, clamp((state.queueDepth||0)/40,0,1.3));
       var hot = load>1 ? '#e05468' : load>0.55 ? '#e0912f' : '#4fa3e3';
       var ringColor = disabled ? 'rgba(255,255,255,.1)' : hot;
       var r = 15 + Math.min(load,1)*6;
@@ -343,6 +344,23 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
       ctx.fillStyle = disabled ? 'rgba(255,255,255,.28)' : '#9397a8';
       ctx.font='500 10.5px IBM Plex Sans, sans-serif';
       ctx.fillText(n.label, x, midY+r+15);
+
+      if(n.k==='queue' && !disabled){
+        var qd = state.queueDepth||0, qa = state.queueActive||0;
+        var qc = qd>40 ? '#e05468' : qd>10 ? '#e0912f' : '#6b7fd7';
+        var qt = 'backlog '+qd+(qa ? ' · '+qa+' active' : '');
+        ctx.font='600 8px IBM Plex Mono, monospace';
+        var qw = ctx.measureText(qt).width+12;
+        ctx.fillStyle='rgba(255,255,255,.06)'; ctx.strokeStyle=qc; ctx.lineWidth=1;
+        roundRect(ctx, x-qw/2, midY-r-16, qw, 12, 5); ctx.fill(); ctx.stroke();
+        ctx.fillStyle=qc; ctx.fillText(qt, x, midY-r-10);
+        var bars = Math.min(10, Math.ceil(qd/5));
+        for(var bi=0; bi<bars; bi++){
+          ctx.fillStyle=qc; ctx.globalAlpha=0.35+0.65*(bi/10);
+          ctx.fillRect(x-14+bi*3, midY-r-20-bi*1.5-2, 2, 3+bi*1.5);
+        }
+        ctx.globalAlpha=1;
+      }
 
       if(n.k==='db' && state.toggles.index){
         ctx.fillStyle='rgba(63,184,120,.16)'; ctx.strokeStyle='#3fb878'; ctx.lineWidth=1;
@@ -567,6 +585,7 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
         metrics.err = msg.err; metrics.dropRate = msg.dropRate; metrics.hitRatio = msg.hitRatio;
         metrics.cost = msg.cost; metrics.breakdown = msg.breakdown;
         state.inFlight = msg.inFlight;
+        state.queueDepth = msg.queueDepth || 0; state.queueActive = msg.queueActive || 0;
         applyToggles(msg.toggles);
         state.history.push({t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99});
         if(state.history.length>72) state.history.shift();
