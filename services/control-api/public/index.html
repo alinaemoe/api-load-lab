@@ -122,7 +122,15 @@ button[hidden],.block[hidden]{display:none}
 .verdict b{color:var(--fg);font-weight:600}
 .footer-card{padding:12px 16px;display:flex;align-items:center;gap:14px}
 .footer-card .time{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);flex:none;min-width:90px}
-.timeline{position:relative;flex:1;height:8px;background:var(--bg);border-radius:999px;border:1px solid var(--line);overflow:hidden}
+.timeline{position:relative;flex:1;height:8px;background:var(--bg);border-radius:999px;border:1px solid var(--line);cursor:pointer;touch-action:none}
+.timeline:focus-visible{outline:2px solid var(--accent);outline-offset:5px}
+.timeline.scrub .fill{transition:none}
+.timeline .thumb{position:absolute;top:50%;left:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#fff;border:2px solid var(--accent);display:none;pointer-events:none}
+.timeline.scrub .thumb{display:block}
+.footer-card{flex-wrap:wrap}
+.timeline{min-width:120px}
+.footer-card .read{font-family:var(--font-mono);font-size:11px;color:var(--fg-dim);order:9;flex:1 0 100%}
+.footer-card button[hidden],.footer-card .read[hidden]{display:none}
 .timeline .fill{position:absolute;inset:0;width:0%;background:var(--accent);border-radius:999px;transition:width .4s}
 @media (max-width:560px){.tiles{grid-template-columns:1fr 1fr}.toggle{min-width:unset}}
 </style>
@@ -207,7 +215,9 @@ button[hidden],.block[hidden]{display:none}
 
   <div class="footer-card">
     <div class="time" id="elapsed">00:00</div>
-    <div class="timeline" id="timeline"><div class="fill" id="timelineFill"></div></div>
+    <div class="timeline" id="timeline" tabindex="0" role="slider" aria-label="Run timeline" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="fill" id="timelineFill"></div><div class="thumb" id="timelineThumb"></div></div>
+    <div class="read" id="scrubRead" hidden></div>
+    <button class="ghost" id="liveBtn" hidden>Live</button>
     <div class="time" id="wsStatus" style="text-align:right">ws: connecting…</div>
   </div>
 </div>
@@ -229,7 +239,7 @@ button[hidden],.block[hidden]{display:none}
     toggles:{limiter:true, cache:true, queue:false, index:false},
     particles:[], floaters:[], nodeLoad:{}, history:[], events:[],
     costSmooth:0, startedAt:0, inFlight:0,
-    runTicks:[], ghost:null
+    runTicks:[], ghost:null, scrub:null
   };
   NODES.forEach(function(n){ state.nodeLoad[n.k]=0; });
 
@@ -409,6 +419,81 @@ button[hidden],.block[hidden]{display:none}
     varCache[v]=val; return val;
   }
 
+  // ---------- timeline scrubber over the recorded ticks ----------
+  var tlEl = document.getElementById('timeline');
+  var tlFill = document.getElementById('timelineFill');
+  var tlThumb = document.getElementById('timelineThumb');
+  var scrubRead = document.getElementById('scrubRead');
+  var liveBtn = document.getElementById('liveBtn');
+
+  function viewMode(){ return state.scrub!==null || (!state.running && state.runTicks.length>1); }
+  function viewHist(){ return viewMode() ? state.runTicks : state.history; }
+  function viewOff(){ return viewMode() ? 0 : histOffset(); }
+  function drawCursor(g, r, n){
+    if(state.scrub===null || n<2) return;
+    var x = state.scrub/(n-1)*r.width;
+    g.strokeStyle='rgba(255,255,255,.6)'; g.lineWidth=1; g.beginPath();
+    g.moveTo(x,0); g.lineTo(x,r.height); g.stroke();
+  }
+  function mmss(sec){ return String(Math.floor(sec/60)).padStart(2,'0')+':'+String(Math.floor(sec%60)).padStart(2,'0'); }
+
+  function paintTimeline(){
+    var n = state.runTicks.length;
+    if(state.scrub!==null && n>1){
+      var f = state.scrub/(n-1)*100;
+      tlFill.style.width = f+'%'; tlThumb.style.left = f+'%';
+      tlEl.classList.add('scrub');
+    } else {
+      tlEl.classList.remove('scrub');
+      tlFill.style.width = (state.running || n>1) ? '100%' : '0%';
+    }
+    tlEl.setAttribute('aria-valuemax', String(Math.max(0,n-1)));
+    tlEl.setAttribute('aria-valuenow', String(state.scrub===null ? Math.max(0,n-1) : state.scrub));
+  }
+
+  function setScrub(idx){
+    var n = state.runTicks.length;
+    if(idx===null || n<2){ state.scrub = null; }
+    else { state.scrub = Math.max(0, Math.min(n-1, Math.round(idx))); }
+    var tk = state.scrub!==null ? state.runTicks[state.scrub] : null;
+    liveBtn.hidden = !tk; scrubRead.hidden = !tk;
+    if(tk){
+      document.getElementById('elapsed').textContent = mmss(tk.t);
+      scrubRead.textContent = 'p95 '+Math.round(tk.p95)+'ms | '+Math.round(tk.rps)+' rps | err '+tk.err.toFixed(1)+'% | '+cfgLabel(tk.toggles);
+    } else if(state.runTicks.length){
+      document.getElementById('elapsed').textContent = mmss(state.runTicks[state.runTicks.length-1].t);
+    } else {
+      document.getElementById('elapsed').textContent = '00:00';
+    }
+    paintTimeline(); refreshTiles();
+  }
+
+  function scrubFromEvent(ev){
+    var r = tlEl.getBoundingClientRect();
+    var f = Math.max(0, Math.min(1, (ev.clientX - r.left)/r.width));
+    setScrub(f*(state.runTicks.length-1));
+  }
+  var dragging = false;
+  tlEl.addEventListener('pointerdown', function(ev){
+    if(state.runTicks.length<2) return;
+    dragging = true; tlEl.setPointerCapture(ev.pointerId); scrubFromEvent(ev);
+  });
+  tlEl.addEventListener('pointermove', function(ev){ if(dragging) scrubFromEvent(ev); });
+  function endDrag(ev){ dragging = false; try { tlEl.releasePointerCapture(ev.pointerId); } catch(e) {} }
+  tlEl.addEventListener('pointerup', endDrag);
+  tlEl.addEventListener('pointercancel', endDrag);
+  tlEl.addEventListener('keydown', function(ev){
+    var n = state.runTicks.length; if(n<2) return;
+    var cur = state.scrub===null ? n-1 : state.scrub, step = ev.shiftKey ? 10 : 1;
+    if(ev.key==='ArrowLeft') setScrub(cur-step);
+    else if(ev.key==='ArrowRight') setScrub(cur+step);
+    else if(ev.key==='Home') setScrub(0);
+    else if(ev.key==='End' || ev.key==='Escape') setScrub(null);
+    else return;
+    ev.preventDefault();
+  });
+  liveBtn.addEventListener('click', function(){ setScrub(null); });
+
   // ---------- race mode: ghost baseline (A) vs live run (B) ----------
   var GHOST_KEY = 'apiLoadLab.ghostA';
   var saveABtn = document.getElementById('saveABtn');
@@ -466,8 +551,8 @@ button[hidden],.block[hidden]{display:none}
   function drawLatencyChart(){
     var c = document.getElementById('chartLatency'); var g=c.getContext('2d');
     var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
-    var hist = state.history; if(hist.length<2) return;
-    var off = histOffset();
+    var hist = viewHist(); if(hist.length<2) return;
+    var off = viewOff();
     var maxV = Math.max(260, hist.reduce(function(m,h){return Math.max(m,h.p99);},0)*1.15);
     if(state.ghost){ hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(gt) maxV=Math.max(maxV, gt.p95*1.15); }); }
     function px(i){ return (i/(hist.length-1))*r.width; }
@@ -488,13 +573,14 @@ button[hidden],.block[hidden]{display:none}
       hist.forEach(function(h,i){ var x=px(i), y=py(h[pair[0]]); i===0?g.moveTo(x,y):g.lineTo(x,y); });
       g.stroke();
     });
+    drawCursor(g, r, hist.length);
   }
 
   function drawRpsChart(){
     var c = document.getElementById('chartRps'); var g=c.getContext('2d');
     var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
-    var hist = state.history; if(hist.length<2) return;
-    var off = histOffset();
+    var hist = viewHist(); if(hist.length<2) return;
+    var off = viewOff();
     var maxV = Math.max(40, hist.reduce(function(m,h){return Math.max(m,h.rps);},0)*1.2);
     if(state.ghost){ hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(gt) maxV=Math.max(maxV, gt.rps*1.2); }); }
     function px(i){ return (i/(hist.length-1))*r.width; }
@@ -513,18 +599,23 @@ button[hidden],.block[hidden]{display:none}
     g.beginPath(); g.strokeStyle='#4fa3e3'; g.lineWidth=1.6;
     hist.forEach(function(h,i){ var x=px(i),y=py(h.rps); i===0?g.moveTo(x,y):g.lineTo(x,y); });
     g.stroke();
+    drawCursor(g, r, hist.length);
   }
 
   function drawErrStrip(){
     var c = stripEl; var g=c.getContext('2d');
     var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
-    var hist = state.history; if(!hist.length) return;
+    var hist = viewHist(); if(!hist.length) return;
     var bw = r.width/Math.max(hist.length,24);
     hist.forEach(function(h,i){
       var e = h.err;
       var col = e>8 ? '#e05468' : e>2 ? '#e0912f' : 'rgba(63,184,120,.5)';
       g.fillStyle=col; g.fillRect(i*bw, 2, Math.max(bw-1.5,1), r.height-4);
     });
+    if(state.scrub!==null){
+      g.strokeStyle='rgba(255,255,255,.8)'; g.lineWidth=1.5; g.beginPath();
+      g.moveTo((state.scrub+0.5)*bw,0); g.lineTo((state.scrub+0.5)*bw,r.height); g.stroke();
+    }
   }
 
   function renderCostBreakdown(){
@@ -549,15 +640,17 @@ button[hidden],.block[hidden]{display:none}
   }
 
   function refreshTiles(){
-    document.getElementById('tileRps').innerHTML = Math.round(metrics.rps)+'<small> rps</small>';
-    document.getElementById('tileP95').innerHTML = Math.round(metrics.p95)+'<small> ms</small>';
-    document.getElementById('tileErr').innerHTML = metrics.err.toFixed(1)+'<small> %</small>';
-    state.costSmooth = lerp(state.costSmooth || metrics.cost, metrics.cost, 0.35);
+    var scrubbed = state.scrub!==null ? state.runTicks[state.scrub] : null;
+    var m = scrubbed || metrics;
+    document.getElementById('tileRps').innerHTML = Math.round(m.rps)+'<small> rps</small>';
+    document.getElementById('tileP95').innerHTML = Math.round(m.p95)+'<small> ms</small>';
+    document.getElementById('tileErr').innerHTML = m.err.toFixed(1)+'<small> %</small>';
+    state.costSmooth = scrubbed ? m.cost : lerp(state.costSmooth || m.cost, m.cost, 0.35);
     document.getElementById('tileCost').innerHTML = '$'+state.costSmooth.toFixed(2)+'<small> /hr</small>';
-    document.getElementById('tileP95box').className = 'tile'+(metrics.p95>220?' bad':metrics.p95>120?' warn':' good');
-    document.getElementById('tileErrBox').className = 'tile'+(metrics.err>8?' bad':metrics.err>2?' warn':'');
-    document.getElementById('targetRps').textContent = Math.round(metrics.rps);
-    document.getElementById('inflight').textContent = state.inFlight;
+    document.getElementById('tileP95box').className = 'tile'+(m.p95>220?' bad':m.p95>120?' warn':' good');
+    document.getElementById('tileErrBox').className = 'tile'+(m.err>8?' bad':m.err>2?' warn':'');
+    document.getElementById('targetRps').textContent = Math.round(m.rps);
+    document.getElementById('inflight').textContent = scrubbed ? '-' : state.inFlight;
   }
 
   function updateVerdict(){
@@ -612,12 +705,12 @@ button[hidden],.block[hidden]{display:none}
 
   document.getElementById('resetBtn').addEventListener('click', function(){
     postJson('/run/stop');
-    state.particles=[]; state.floaters=[]; state.history=[]; state.events=[]; state.runTicks=[]; updateCompare();
+    state.particles=[]; state.floaters=[]; state.history=[]; state.events=[]; state.runTicks=[]; setScrub(null); updateCompare();
     metrics = {rps:0,p50:0,p95:0,p99:0,err:0,dropRate:0,hitRatio:0,cost:0,breakdown:null};
     state.costSmooth=0; state.startedAt=0;
     refreshTiles();
     document.getElementById('elapsed').textContent='00:00';
-    document.getElementById('timelineFill').style.width='0%';
+    paintTimeline();
   });
 
   function applyToggles(toggles){
@@ -630,7 +723,7 @@ button[hidden],.block[hidden]{display:none}
   }
 
   function applyRunning(running, profile){
-    if(running && !state.running){ state.runTicks=[]; state.history=[]; }
+    if(running && !state.running){ state.runTicks=[]; state.history=[]; setScrub(null); }
     state.running = !!running;
     if(profile){ state.profile = profile; profileSelect.value = profile; }
     var chip = document.getElementById('statusChip');
@@ -639,13 +732,13 @@ button[hidden],.block[hidden]{display:none}
     playBtn.textContent = state.running ? 'Pause' : 'Start test';
     if(state.running && !state.startedAt) state.startedAt = Date.now();
     if(!state.running) state.startedAt = 0;
-    document.getElementById('timelineFill').style.width = state.running ? '100%' : '0%';
+    paintTimeline();
     updateVerdict();
     updateCompare();
   }
 
   setInterval(function(){
-    if(state.running && state.startedAt){
+    if(state.running && state.startedAt && state.scrub===null){
       var sec = (Date.now()-state.startedAt)/1000;
       var mm=Math.floor(sec/60), ss=Math.floor(sec%60);
       document.getElementById('elapsed').textContent = String(mm).padStart(2,'0')+':'+String(ss).padStart(2,'0');
