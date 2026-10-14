@@ -108,6 +108,14 @@ canvas#pipeline{width:100%;height:300px;display:block}
 .legend i{width:8px;height:2px;border-radius:2px;display:inline-block}
 canvas.chart{width:100%;height:92px;display:block}
 canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
+button:disabled{opacity:.4;cursor:default}
+button[hidden],.block[hidden]{display:none}
+.cmp table{width:100%;border-collapse:collapse;font-size:11.5px;font-family:'IBM Plex Mono',monospace}
+.cmp th{font-weight:500;color:var(--fg-faint);text-align:right;padding:2px 0}
+.cmp th:first-child,.cmp td:first-child{text-align:left;color:var(--fg-dim)}
+.cmp td{text-align:right;padding:3px 0;color:var(--fg)}
+.cmp .better{color:#3fb878}.cmp .worse{color:#e05468}
+.cmp .cfg{font-size:10.5px;color:var(--fg-faint);margin:0 0 6px}
 .verdict{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line)}
 .verdict .ic{width:7px;height:7px;border-radius:50%;background:var(--flow);margin-top:6px;flex:none}
 .verdict p{margin:0;font-size:12.5px;line-height:1.5;color:var(--fg-dim)}
@@ -138,6 +146,8 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
         <option value="stress">Stress</option>
         <option value="soak">Soak</option>
       </select>
+      <button class="ghost" id="saveABtn" disabled title="Keep this run as the ghost baseline (A)">Save as A</button>
+      <button class="ghost" id="clearABtn" hidden>Clear A</button>
       <button class="primary" id="playBtn">Start test</button>
       <button class="ghost" id="resetBtn">Reset</button>
     </div>
@@ -185,6 +195,12 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
         <div class="legend" id="costLegend" style="margin-top:7px"></div>
       </div>
 
+      <div class="block cmp" id="cmpBlock" hidden>
+        <h3>Run B vs ghost A <span id="cmpLen" style="font-weight:400;color:var(--fg-faint)"></span></h3>
+        <p class="cfg" id="cmpCfg"></p>
+        <table><thead><tr><th></th><th>A</th><th>B</th><th>&Delta;</th></tr></thead><tbody id="cmpBody"></tbody></table>
+      </div>
+
       <div class="verdict"><span class="ic" id="verdictDot"></span><p id="verdictText"><b>Ready.</b> Hit start to pour traffic into the pipeline.</p></div>
     </aside>
   </div>
@@ -212,7 +228,8 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
     running:false, profile:'spike',
     toggles:{limiter:true, cache:true, queue:false, index:false},
     particles:[], floaters:[], nodeLoad:{}, history:[], events:[],
-    costSmooth:0, startedAt:0, inFlight:0
+    costSmooth:0, startedAt:0, inFlight:0,
+    runTicks:[], ghost:null
   };
   NODES.forEach(function(n){ state.nodeLoad[n.k]=0; });
 
@@ -392,14 +409,76 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
     varCache[v]=val; return val;
   }
 
+  // ---------- race mode: ghost baseline (A) vs live run (B) ----------
+  var GHOST_KEY = 'apiLoadLab.ghostA';
+  var saveABtn = document.getElementById('saveABtn');
+  var clearABtn = document.getElementById('clearABtn');
+  try { var saved = localStorage.getItem(GHOST_KEY); if(saved) state.ghost = JSON.parse(saved); } catch(e) {}
+
+  function cfgLabel(tg){
+    if(!tg) return '-';
+    var on = ['limiter','cache','queue','index'].filter(function(k){ return tg[k]; });
+    return on.length ? on.join(' + ') : 'bare';
+  }
+  function ghostAt(i){ return state.ghost && state.ghost.ticks[i]; }
+  // history is a sliding window over runTicks; this is the run-tick index of history[0]
+  function histOffset(){ return state.runTicks.length - state.history.length; }
+
+  saveABtn.addEventListener('click', function(){
+    if(state.runTicks.length<5) return;
+    var last = state.runTicks[state.runTicks.length-1];
+    state.ghost = {ticks: state.runTicks.slice(), toggles: last.toggles, profile: state.profile};
+    try { localStorage.setItem(GHOST_KEY, JSON.stringify(state.ghost)); } catch(e) {}
+    updateCompare();
+  });
+  clearABtn.addEventListener('click', function(){
+    state.ghost = null;
+    try { localStorage.removeItem(GHOST_KEY); } catch(e) {}
+    updateCompare();
+  });
+
+  function avg(arr, k){ return arr.length ? arr.reduce(function(s,x){return s+x[k];},0)/arr.length : 0; }
+  function updateCompare(){
+    saveABtn.disabled = state.runTicks.length<5;
+    clearABtn.hidden = !state.ghost;
+    var box = document.getElementById('cmpBlock');
+    var n = state.ghost ? Math.min(state.ghost.ticks.length, state.runTicks.length) : 0;
+    if(!state.ghost || n<3){ box.hidden = true; return; }
+    box.hidden = false;
+    var a = state.ghost.ticks.slice(0,n), b = state.runTicks.slice(0,n);
+    document.getElementById('cmpLen').textContent = 'first '+n+'s';
+    var last = state.runTicks[state.runTicks.length-1];
+    document.getElementById('cmpCfg').textContent = 'A: '+cfgLabel(state.ghost.toggles)+'  |  B: '+cfgLabel(last && last.toggles)
+      + (state.ghost.profile && state.ghost.profile!==state.profile ? '  |  profiles differ ('+state.ghost.profile+' vs '+state.profile+')' : '');
+    var rows = [
+      ['p95 ms','p95',0,true],['p99 ms','p99',0,true],['errors %','err',1,true],['rps','rps',0,false],['cost $/h','cost',2,true]
+    ];
+    document.getElementById('cmpBody').innerHTML = rows.map(function(r){
+      var va=avg(a,r[1]), vb=avg(b,r[1]);
+      var d = va ? (vb-va)/va*100 : 0;
+      var good = r[3] ? d<-2 : d>2, bad = r[3] ? d>2 : d<-2;
+      var cls = good ? 'better' : bad ? 'worse' : '';
+      return '<tr><td>'+r[0]+'</td><td>'+va.toFixed(r[2])+'</td><td>'+vb.toFixed(r[2])+'</td><td class="'+cls+'">'+(d>0?'+':'')+d.toFixed(0)+'%</td></tr>';
+    }).join('');
+  }
+
   // ---------- charts (fed by server tick history) ----------
   function drawLatencyChart(){
     var c = document.getElementById('chartLatency'); var g=c.getContext('2d');
     var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
     var hist = state.history; if(hist.length<2) return;
+    var off = histOffset();
     var maxV = Math.max(260, hist.reduce(function(m,h){return Math.max(m,h.p99);},0)*1.15);
+    if(state.ghost){ hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(gt) maxV=Math.max(maxV, gt.p95*1.15); }); }
     function px(i){ return (i/(hist.length-1))*r.width; }
     function py(v){ return r.height - (v/maxV)*r.height; }
+
+    if(state.ghost){
+      g.beginPath(); g.strokeStyle='rgba(255,255,255,.4)'; g.lineWidth=1.4; g.setLineDash([5,4]);
+      var started=false;
+      hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(!gt) return; var x=px(i), y=py(gt.p95); started?g.lineTo(x,y):g.moveTo(x,y); started=true; });
+      g.stroke(); g.setLineDash([]);
+    }
 
     g.strokeStyle='rgba(255,255,255,.1)'; g.setLineDash([4,4]); g.lineWidth=1;
     g.beginPath(); g.moveTo(0,py(200)); g.lineTo(r.width,py(200)); g.stroke(); g.setLineDash([]);
@@ -415,9 +494,17 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
     var c = document.getElementById('chartRps'); var g=c.getContext('2d');
     var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
     var hist = state.history; if(hist.length<2) return;
+    var off = histOffset();
     var maxV = Math.max(40, hist.reduce(function(m,h){return Math.max(m,h.rps);},0)*1.2);
+    if(state.ghost){ hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(gt) maxV=Math.max(maxV, gt.rps*1.2); }); }
     function px(i){ return (i/(hist.length-1))*r.width; }
     function py(v){ return r.height - (v/maxV)*r.height; }
+    if(state.ghost){
+      g.beginPath(); g.strokeStyle='rgba(255,255,255,.4)'; g.lineWidth=1.4; g.setLineDash([5,4]);
+      var gs=false;
+      hist.forEach(function(h,i){ var gt=ghostAt(off+i); if(!gt) return; var x=px(i), y=py(gt.rps); gs?g.lineTo(x,y):g.moveTo(x,y); gs=true; });
+      g.stroke(); g.setLineDash([]);
+    }
     var grad = g.createLinearGradient(0,0,0,r.height);
     grad.addColorStop(0,'rgba(79,163,227,.3)'); grad.addColorStop(1,'rgba(79,163,227,0)');
     g.beginPath(); g.moveTo(0,r.height);
@@ -525,7 +612,7 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
 
   document.getElementById('resetBtn').addEventListener('click', function(){
     postJson('/run/stop');
-    state.particles=[]; state.floaters=[]; state.history=[]; state.events=[];
+    state.particles=[]; state.floaters=[]; state.history=[]; state.events=[]; state.runTicks=[]; updateCompare();
     metrics = {rps:0,p50:0,p95:0,p99:0,err:0,dropRate:0,hitRatio:0,cost:0,breakdown:null};
     state.costSmooth=0; state.startedAt=0;
     refreshTiles();
@@ -543,6 +630,7 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
   }
 
   function applyRunning(running, profile){
+    if(running && !state.running){ state.runTicks=[]; state.history=[]; }
     state.running = !!running;
     if(profile){ state.profile = profile; profileSelect.value = profile; }
     var chip = document.getElementById('statusChip');
@@ -553,6 +641,7 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
     if(!state.running) state.startedAt = 0;
     document.getElementById('timelineFill').style.width = state.running ? '100%' : '0%';
     updateVerdict();
+    updateCompare();
   }
 
   setInterval(function(){
@@ -587,8 +676,12 @@ canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
         state.inFlight = msg.inFlight;
         state.queueDepth = msg.queueDepth || 0; state.queueActive = msg.queueActive || 0;
         applyToggles(msg.toggles);
-        state.history.push({t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99});
+        var rec = {t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99, cost:msg.cost, toggles:msg.toggles};
+        state.runTicks.push(rec);
+        if(state.runTicks.length>900) state.runTicks.shift();
+        state.history.push(rec);
         if(state.history.length>72) state.history.shift();
+        updateCompare();
         refreshTiles();
         updateVerdict();
       } else if(msg.type === 'event'){

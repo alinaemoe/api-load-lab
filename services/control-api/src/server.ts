@@ -56,6 +56,12 @@ async function main() {
 
   app.post<{ Body: { profile: Profile } }>("/run/start", async (req) => {
     const profile = req.body?.profile || "spike";
+    engine.stop();
+    // fresh cache/queue so back-to-back runs are comparable
+    await fetch(`${TARGET_URL}/admin/reset`, {
+      method: "POST",
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => undefined);
     engine.start(profile);
     broadcast({ type: "state", running: true, profile });
     return { ok: true, profile: engine.profile };

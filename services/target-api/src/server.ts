@@ -32,6 +32,20 @@ app.get("/admin/queue", async () => {
   return { waiting: c.waiting + c.delayed, active: c.active };
 });
 
+// Clean slate between comparison runs: drop cached products and queued jobs.
+// Deletes by prefix instead of FLUSHDB so BullMQ's own bookkeeping survives.
+app.post("/admin/reset", async () => {
+  let cursor = "0";
+  let removed = 0;
+  do {
+    const [next, keys] = await redis.scan(cursor, "MATCH", "product:*", "COUNT", 500);
+    cursor = next;
+    if (keys.length) removed += await redis.del(...keys);
+  } while (cursor !== "0");
+  await lookupQueue.drain(true);
+  return { ok: true, cacheKeysRemoved: removed };
+});
+
 app.post<{ Body: Partial<Toggles> }>("/admin/toggles", async (req) => {
   const body = req.body || {};
   if (typeof body.cache === "boolean") toggles.cache = body.cache;
