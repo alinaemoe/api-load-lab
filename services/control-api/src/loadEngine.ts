@@ -19,10 +19,14 @@ type Tick = {
   p95: number;
   p99: number;
   hitRatio: number;
+  dropRate: number;
   inFlight: number;
   cost: number;
   breakdown: Record<string, number>;
+  toggles: Toggles;
 };
+
+type Event = { type: "event"; outcome: Outcome; ms: number };
 
 export class LoadEngine {
   running = false;
@@ -41,16 +45,21 @@ export class LoadEngine {
   private secHandle: NodeJS.Timeout | null = null;
   private samples: Sample[] = [];
   private secBucket = { done: 0, err: 0, drop: 0, hit: 0 };
+  private eventCount = 0;
+  private eventCap = 120;
   private onTick: (tick: Tick) => void;
+  private onEvent: (event: Event) => void;
 
   constructor(opts: {
     targetUrl: string;
     rowCount: number;
     onTick: (tick: Tick) => void;
+    onEvent: (event: Event) => void;
   }) {
     this.targetUrl = opts.targetUrl;
     this.rowCount = opts.rowCount;
     this.onTick = opts.onTick;
+    this.onEvent = opts.onEvent;
     for (let i = 0; i < 200; i++) {
       this.hotSet.push(this.skuFor(1 + Math.floor(Math.random() * this.rowCount)));
     }
@@ -133,6 +142,10 @@ export class LoadEngine {
       this.secBucket.done++;
       if (s.outcome === "hit") this.secBucket.hit++;
     }
+    if (this.eventCount < this.eventCap) {
+      this.eventCount++;
+      this.onEvent({ type: "event", outcome: s.outcome, ms: s.ms });
+    }
   }
 
   private percentile(arr: number[], p: number) {
@@ -148,6 +161,7 @@ export class LoadEngine {
     const p95 = this.percentile(latencies, 0.95);
     const p99 = this.percentile(latencies, 0.99);
     const err = totalIn ? (this.secBucket.err / totalIn) * 100 : 0;
+    const dropRate = totalIn ? (this.secBucket.drop / totalIn) * 100 : 0;
 
     // simulated infra cost model — not real billing, just a stand-in for
     // "what would the toggled components cost at this throughput"
@@ -167,11 +181,14 @@ export class LoadEngine {
       p95,
       p99,
       hitRatio: this.secBucket.done ? this.secBucket.hit / this.secBucket.done : 0,
+      dropRate,
       inFlight: this.inFlight,
       cost,
       breakdown: { compute, cache: cacheCost, queue: queueCost, index: idxCost, database: dbCost },
+      toggles: { ...this.toggles },
     });
 
     this.secBucket = { done: 0, err: 0, drop: 0, hit: 0 };
+    this.eventCount = 0;
   }
 }

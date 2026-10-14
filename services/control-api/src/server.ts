@@ -1,6 +1,8 @@
+import path from "node:path";
 import Fastify from "fastify";
 import websocketPlugin, { WebSocket } from "@fastify/websocket";
 import cors from "@fastify/cors";
+import staticPlugin from "@fastify/static";
 import { LoadEngine, Toggles } from "./loadEngine";
 import { Profile } from "./profiles";
 
@@ -10,20 +12,26 @@ const ROW_COUNT = Number(process.env.ROW_COUNT || 1_000_000);
 const app = Fastify({ logger: false });
 const sockets = new Set<WebSocket>();
 
+function broadcast(obj: unknown) {
+  const msg = JSON.stringify(obj);
+  for (const sock of sockets) {
+    if (sock.readyState === sock.OPEN) sock.send(msg);
+  }
+}
+
 const engine = new LoadEngine({
   targetUrl: TARGET_URL,
   rowCount: ROW_COUNT,
-  onTick: (tick) => {
-    const msg = JSON.stringify(tick);
-    for (const sock of sockets) {
-      if (sock.readyState === sock.OPEN) sock.send(msg);
-    }
-  },
+  onTick: (tick) => broadcast(tick),
+  onEvent: (event) => broadcast(event),
 });
 
 async function main() {
   await app.register(cors, { origin: true });
   await app.register(websocketPlugin);
+  await app.register(staticPlugin, {
+    root: path.join(__dirname, "..", "public"),
+  });
 
   app.register(async (f) => {
     f.get("/ws", { websocket: true }, (socket) => {
@@ -47,12 +55,15 @@ async function main() {
   }));
 
   app.post<{ Body: { profile: Profile } }>("/run/start", async (req) => {
-    engine.start(req.body?.profile || "spike");
+    const profile = req.body?.profile || "spike";
+    engine.start(profile);
+    broadcast({ type: "state", running: true, profile });
     return { ok: true, profile: engine.profile };
   });
 
   app.post("/run/stop", async () => {
     engine.stop();
+    broadcast({ type: "state", running: false, profile: engine.profile });
     return { ok: true };
   });
 
@@ -64,6 +75,7 @@ async function main() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
+    broadcast({ type: "toggles", toggles: engine.toggles });
     return { ok: true, toggles: engine.toggles };
   });
 

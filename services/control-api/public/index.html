@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API Load Lab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#15161f;
+  --bg2:#1b1d28;
+  --bg3:#232531;
+  --line:rgba(255,255,255,.08);
+  --line-strong:rgba(255,255,255,.14);
+  --fg:#eceef3;
+  --fg-dim:#9397a8;
+  --fg-faint:#656a7d;
+  --accent:#8166e8;
+  --accent-dim:rgba(129,102,232,.18);
+  --flow:#4fa3e3;
+  --good:#3fb878;
+  --warn:#e0912f;
+  --bad:#e05468;
+  --font-ui:'IBM Plex Sans',system-ui,sans-serif;
+  --font-mono:'IBM Plex Mono',ui-monospace,monospace;
+  color-scheme: dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--bg);
+  color:var(--fg);
+  font-family:var(--font-ui);
+  padding-inline:16px;
+  padding-block:16px;
+  display:flex;
+  justify-content:center;
+}
+.app{width:100%;max-width:1320px;display:flex;flex-direction:column;gap:14px}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
+  padding:14px 18px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;
+}
+.brand{display:flex;align-items:center;gap:11px}
+.brand .mark{width:32px;height:32px;border-radius:8px;background:var(--accent);flex:none;display:flex;align-items:center;justify-content:center}
+.brand .mark svg{width:16px;height:16px}
+.brand h1{font-size:16px;font-weight:600;margin:0;letter-spacing:-.1px;color:var(--fg)}
+.brand .tag{font-size:12px;color:var(--fg-faint);margin-top:1px}
+.status-chip{
+  display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;letter-spacing:.4px;
+  color:var(--fg-dim);text-transform:uppercase;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:var(--bg);
+}
+.status-chip .dot{width:6px;height:6px;border-radius:50%;background:var(--fg-faint)}
+.status-chip.live .dot{background:var(--good);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+select, button.primary, button.ghost{
+  font-family:var(--font-ui);font-size:13px;font-weight:500;border-radius:6px;border:1px solid var(--line-strong);
+  padding:8px 13px;cursor:pointer;color:var(--fg);background:var(--bg3);transition:background .12s,border-color .12s;
+}
+select{appearance:none;color:var(--fg-dim);padding-right:28px;
+  background-image:linear-gradient(45deg,transparent 50%,var(--fg-dim) 50%),linear-gradient(135deg,var(--fg-dim) 50%,transparent 50%);
+  background-position:calc(100% - 15px) center,calc(100% - 10px) center;background-size:5px 5px;background-repeat:no-repeat;
+}
+select:hover, button.ghost:hover{border-color:var(--line-strong);background:var(--bg2)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{background:#9279ec}
+button.primary:active{background:#6f54d6}
+button:focus-visible, select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.layout{display:grid;grid-template-columns:1.65fr 360px;gap:14px}
+@media (max-width:860px){.layout{grid-template-columns:1fr}}
+.stage-card, .panel, .footer-card{background:var(--bg2);border:1px solid var(--line);border-radius:10px}
+.stage-card{padding:14px 14px 6px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.stage-head{display:flex;justify-content:space-between;align-items:baseline;padding:2px 4px}
+.stage-head h2{font-size:13px;margin:0;color:var(--fg-dim);font-weight:600}
+.stage-head .readout{font-family:var(--font-mono);font-size:12px;color:var(--fg-faint)}
+.stage-head .readout b{color:var(--flow);font-weight:500}
+.canvas-wrap{border-radius:8px;overflow:hidden;background:var(--bg);border:1px solid var(--line)}
+canvas#pipeline{width:100%;height:300px;display:block}
+.toggle-row{display:flex;gap:8px;flex-wrap:wrap;padding:4px 4px 10px}
+.toggle{
+  display:flex;align-items:center;gap:8px;padding:7px 11px;border:1px solid var(--line-strong);border-radius:8px;
+  background:var(--bg);cursor:pointer;user-select:none;flex:1;min-width:132px;justify-content:space-between;transition:border-color .12s;
+}
+.toggle .lbl{font-size:12px;font-weight:500;color:var(--fg-dim)}
+.toggle.on .lbl{color:var(--fg)}
+.toggle.on{border-color:var(--accent)}
+.switch{width:28px;height:16px;border-radius:999px;background:var(--bg3);border:1px solid var(--line-strong);position:relative;flex:none;transition:background .2s}
+.switch::after{content:'';position:absolute;top:1px;left:1px;width:12px;height:12px;border-radius:50%;background:var(--fg-faint);transition:transform .2s,background .2s}
+.toggle.on .switch{background:var(--accent-dim);border-color:var(--accent)}
+.toggle.on .switch::after{transform:translateX(12px);background:var(--accent)}
+.panel{padding:14px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.tile .k{font-size:10px;letter-spacing:.4px;text-transform:uppercase;color:var(--fg-faint);font-weight:600}
+.tile .v{font-family:var(--font-mono);font-size:19px;margin-top:4px;font-variant-numeric:tabular-nums;color:var(--fg)}
+.tile .v small{font-size:11px;color:var(--fg-dim);font-weight:500}
+.tile.bad .v{color:var(--bad)}
+.tile.warn .v{color:var(--warn)}
+.tile.good .v{color:var(--good)}
+.tile.accent .v{color:var(--accent)}
+.block{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px 8px}
+.block h3{font-size:11px;margin:0 0 6px;color:var(--fg-dim);font-weight:600;display:flex;justify-content:space-between}
+.legend{display:flex;gap:10px;font-family:var(--font-mono);font-size:10px;color:var(--fg-faint);flex-wrap:wrap}
+.legend span{display:inline-flex;align-items:center;gap:4px}
+.legend i{width:8px;height:2px;border-radius:2px;display:inline-block}
+canvas.chart{width:100%;height:92px;display:block}
+canvas.strip{width:100%;height:20px;display:block;margin-top:2px}
+.verdict{display:flex;gap:9px;align-items:flex-start;padding:11px 12px;border-radius:8px;background:var(--bg);border:1px solid var(--line)}
+.verdict .ic{width:7px;height:7px;border-radius:50%;background:var(--flow);margin-top:6px;flex:none}
+.verdict p{margin:0;font-size:12.5px;line-height:1.5;color:var(--fg-dim)}
+.verdict b{color:var(--fg);font-weight:600}
+.footer-card{padding:12px 16px;display:flex;align-items:center;gap:14px}
+.footer-card .time{font-family:var(--font-mono);font-size:11px;color:var(--fg-faint);flex:none;min-width:90px}
+.timeline{position:relative;flex:1;height:8px;background:var(--bg);border-radius:999px;border:1px solid var(--line);overflow:hidden}
+.timeline .fill{position:absolute;inset:0;width:0%;background:var(--accent);border-radius:999px;transition:width .4s}
+@media (max-width:560px){.tiles{grid-template-columns:1fr 1fr}.toggle{min-width:unset}}
+</style>
+</head>
+<body>
+<div class="app" id="appRoot">
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg></div>
+      <div>
+        <h1>API Load Lab</h1>
+        <div class="tag">Live request pipeline — real Postgres, Redis, BullMQ</div>
+      </div>
+    </div>
+    <div class="controls">
+      <span class="status-chip" id="statusChip"><span class="dot"></span><span id="statusText">IDLE</span></span>
+      <select id="profileSelect">
+        <option value="constant">Constant</option>
+        <option value="ramp">Ramp-up</option>
+        <option value="spike" selected>Spike</option>
+        <option value="stress">Stress</option>
+        <option value="soak">Soak</option>
+      </select>
+      <button class="primary" id="playBtn">Start test</button>
+      <button class="ghost" id="resetBtn">Reset</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <section class="stage-card">
+      <div class="stage-head">
+        <h2>Request pipeline</h2>
+        <div class="readout">rps <b id="targetRps">0</b> · in flight <b id="inflight">0</b></div>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="pipeline"></canvas>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle on" data-k="limiter"><span class="lbl">Rate limiter</span><span class="switch"></span></div>
+        <div class="toggle on" data-k="cache"><span class="lbl">Cache</span><span class="switch"></span></div>
+        <div class="toggle" data-k="queue"><span class="lbl">Queue + workers</span><span class="switch"></span></div>
+        <div class="toggle" data-k="index"><span class="lbl">DB index</span><span class="switch"></span></div>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="tiles">
+        <div class="tile accent"><div class="k">Throughput</div><div class="v" id="tileRps">0<small> rps</small></div></div>
+        <div class="tile" id="tileP95box"><div class="k">p95 latency</div><div class="v" id="tileP95">0<small> ms</small></div></div>
+        <div class="tile" id="tileErrBox"><div class="k">Error rate</div><div class="v" id="tileErr">0.0<small> %</small></div></div>
+        <div class="tile"><div class="k">Infra cost</div><div class="v" id="tileCost">$0.00<small> /hr</small></div></div>
+      </div>
+
+      <div class="block">
+        <h3>Latency <span class="legend"><span><i style="background:var(--fg-faint)"></i>p50</span><span><i style="background:var(--flow)"></i>p95</span><span><i style="background:var(--warn)"></i>p99</span></span></h3>
+        <canvas class="chart" id="chartLatency"></canvas>
+      </div>
+
+      <div class="block">
+        <h3>Throughput &amp; errors</h3>
+        <canvas class="chart" id="chartRps" style="height:64px"></canvas>
+        <canvas class="strip" id="stripErr"></canvas>
+      </div>
+
+      <div class="block">
+        <h3>Cost breakdown <span style="font-weight:400;text-transform:none;color:var(--fg-faint)">(simulated)</span></h3>
+        <div id="costBar" style="height:8px;border-radius:999px;overflow:hidden;display:flex;background:var(--bg3)"></div>
+        <div class="legend" id="costLegend" style="margin-top:7px"></div>
+      </div>
+
+      <div class="verdict"><span class="ic" id="verdictDot"></span><p id="verdictText"><b>Ready.</b> Hit start to pour traffic into the pipeline.</p></div>
+    </aside>
+  </div>
+
+  <div class="footer-card">
+    <div class="time" id="elapsed">00:00</div>
+    <div class="timeline" id="timeline"><div class="fill" id="timelineFill"></div></div>
+    <div class="time" id="wsStatus" style="text-align:right">ws: connecting…</div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var NODES = [
+    {k:'clients', x:0.06, label:'Clients', toggle:null},
+    {k:'limiter', x:0.21, label:'Rate limiter', toggle:'limiter'},
+    {k:'api',     x:0.37, label:'API', toggle:null},
+    {k:'cache',   x:0.54, label:'Cache', toggle:'cache'},
+    {k:'queue',   x:0.71, label:'Queue', toggle:'queue'},
+    {k:'db',      x:0.91, label:'Database', toggle:null}
+  ];
+
+  var state = {
+    running:false, profile:'spike',
+    toggles:{limiter:true, cache:true, queue:false, index:false},
+    particles:[], floaters:[], nodeLoad:{}, history:[], events:[],
+    costSmooth:0, startedAt:0, inFlight:0
+  };
+  NODES.forEach(function(n){ state.nodeLoad[n.k]=0; });
+
+  var metrics = {rps:0,p50:0,p95:0,p99:0,err:0,dropRate:0,hitRatio:0,cost:0,breakdown:null};
+
+  function rand(a,b){ return a+Math.random()*(b-a); }
+  function clamp(v,a,b){ return Math.max(a,Math.min(b,v)); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+
+  // ---------- canvas setup ----------
+  var cv = document.getElementById('pipeline');
+  var ctx = cv.getContext('2d');
+  function fitCanvas(c){
+    var ctx2 = c.getContext('2d');
+    var dpr = Math.min(window.devicePixelRatio||1, 2);
+    var r = c.getBoundingClientRect();
+    c.width = Math.max(1,Math.round(r.width*dpr));
+    c.height = Math.max(1,Math.round(r.height*dpr));
+    ctx2.setTransform(dpr,0,0,dpr,0,0);
+    return {w:r.width, h:r.height};
+  }
+  var pipeDim = fitCanvas(cv);
+  var charts = ['chartLatency','chartRps'].map(function(id){ return document.getElementById(id); });
+  var stripEl = document.getElementById('stripErr');
+  function resizeAll(){
+    pipeDim = fitCanvas(cv);
+    charts.forEach(fitCanvas);
+    fitCanvas(stripEl);
+  }
+  window.addEventListener('resize', resizeAll);
+
+  // ---------- particles driven by real backend events ----------
+  function colorFor(outcome){
+    return outcome==='hit' ? '#3fb878' : outcome==='error' ? '#e05468' : outcome==='drop' ? '#e0912f' : '#4fa3e3';
+  }
+
+  function pathFor(outcome, toggles){
+    var xs=[NODES[0].x, NODES[1].x], stages=['clients','limiter'];
+    if(outcome==='drop') return {xs:xs, stages:stages};
+    xs.push(NODES[2].x); stages.push('api');
+    if(toggles.cache){
+      xs.push(NODES[3].x); stages.push('cache');
+      if(outcome==='hit') return {xs:xs, stages:stages};
+    }
+    if(toggles.queue){ xs.push(NODES[4].x); stages.push('queue'); }
+    xs.push(NODES[5].x); stages.push('db');
+    return {xs:xs, stages:stages};
+  }
+
+  function spawnFromEvent(outcome, ms){
+    var path = pathFor(outcome, state.toggles);
+    var animMs = clamp(380 + Math.sqrt(Math.max(ms,1))*140, 420, 3400);
+    state.particles.push({
+      xs:path.xs, stages:path.stages, outcome:outcome, totalMs:Math.round(ms),
+      t0:performance.now(), dur:animMs, yJit:rand(-13,13), stage:path.stages[0], done:false
+    });
+    if(state.particles.length>160) state.particles.shift();
+  }
+
+  function addFloater(x,y,text,color){
+    state.floaters.push({x:x,y:y,text:text,color:color,t0:performance.now(),dur:900});
+  }
+
+  function finishParticle(p){
+    var node = NODES.filter(function(n){return n.k===p.stages[p.stages.length-1];})[0];
+    var x = node.x*pipeDim.w, y = pipeDim.h*0.52;
+    var color = p.outcome==='hit'?'var(--good)': p.outcome==='ok'?'var(--flow)': p.outcome==='drop'?'var(--warn)':'var(--bad)';
+    var label = p.outcome==='drop' ? 'DROP' : p.outcome==='error' ? 'ERR' : p.totalMs+'ms';
+    addFloater(x,y,label,color);
+    state.nodeLoad[node.k] = Math.min(4, state.nodeLoad[node.k]+1);
+  }
+
+  function drawPipeline(now){
+    var w=pipeDim.w, h=pipeDim.h, midY=h*0.52;
+    ctx.clearRect(0,0,w,h);
+
+    ctx.lineWidth=2;
+    for(var i=0;i<NODES.length-1;i++){
+      var a=NODES[i], b=NODES[i+1];
+      var disabled = (b.toggle && !state.toggles[b.toggle]);
+      ctx.strokeStyle = disabled ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.1)';
+      ctx.setLineDash(disabled ? [5,6] : []);
+      ctx.beginPath(); ctx.moveTo(a.x*w, midY); ctx.lineTo(b.x*w, midY); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    state.particles.forEach(function(p){
+      var tt = clamp((now-p.t0)/p.dur,0,1);
+      var segN = p.xs.length-1;
+      var segF = tt*segN;
+      var si = clamp(Math.floor(segF),0,segN-1);
+      var localT = segF-si;
+      var x = lerp(p.xs[si], p.xs[si+1], localT)*w;
+      var y = midY + p.yJit * Math.sin(localT*Math.PI);
+      p.stage = p.stages[Math.min(si+1,p.stages.length-1)];
+      var c = colorFor(tt>=0.94 ? p.outcome : 'ok');
+      ctx.beginPath(); ctx.fillStyle=c; ctx.shadowColor=c; ctx.shadowBlur=5;
+      ctx.arc(x,y,3.2,0,Math.PI*2); ctx.fill();
+      ctx.shadowBlur=0;
+      if(tt>=1 && !p.done){ p.done=true; finishParticle(p); }
+    });
+    state.particles = state.particles.filter(function(p){ return performance.now()-p.t0 < p.dur+40; });
+
+    NODES.forEach(function(n){
+      var x=n.x*w;
+      var disabled = n.toggle && !state.toggles[n.toggle];
+      state.nodeLoad[n.k] *= 0.93;
+      var load = clamp(state.nodeLoad[n.k]/3,0,1.3);
+      var hot = load>1 ? '#e05468' : load>0.55 ? '#e0912f' : '#4fa3e3';
+      var ringColor = disabled ? 'rgba(255,255,255,.1)' : hot;
+      var r = 15 + Math.min(load,1)*6;
+
+      ctx.beginPath(); ctx.fillStyle = 'rgba(255,255,255,.03)';
+      ctx.arc(x,midY,r+6,0,Math.PI*2); ctx.fill();
+
+      ctx.beginPath(); ctx.strokeStyle = ringColor; ctx.lineWidth=2;
+      ctx.globalAlpha = disabled?0.5:1;
+      ctx.arc(x,midY,r,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
+
+      ctx.beginPath(); ctx.fillStyle = disabled ? 'rgba(255,255,255,.07)' : '#1b1d28';
+      ctx.arc(x,midY,r-3,0,Math.PI*2); ctx.fill();
+
+      ctx.fillStyle = disabled ? 'rgba(255,255,255,.3)' : '#eceef3';
+      ctx.font='600 10px IBM Plex Mono, monospace'; ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText(n.k==='db'?'DB':n.k==='limiter'?'LIM':n.k.slice(0,3).toUpperCase(), x, midY);
+
+      ctx.fillStyle = disabled ? 'rgba(255,255,255,.28)' : '#9397a8';
+      ctx.font='500 10.5px IBM Plex Sans, sans-serif';
+      ctx.fillText(n.label, x, midY+r+15);
+
+      if(n.k==='db' && state.toggles.index){
+        ctx.fillStyle='rgba(63,184,120,.16)'; ctx.strokeStyle='#3fb878'; ctx.lineWidth=1;
+        roundRect(ctx, x-13, midY-r-16, 26, 12, 5); ctx.fill(); ctx.stroke();
+        ctx.fillStyle='#3fb878'; ctx.font='600 8px IBM Plex Mono, monospace'; ctx.fillText('IDX', x, midY-r-10);
+      }
+    });
+
+    state.floaters.forEach(function(f){
+      var tt = clamp((now-f.t0)/f.dur,0,1);
+      ctx.globalAlpha = 1-tt;
+      ctx.fillStyle = f.color.indexOf('var(')===0 ? resolveVar(f.color) : f.color;
+      ctx.font='600 11px IBM Plex Mono, monospace'; ctx.textAlign='center';
+      ctx.fillText(f.text, f.x, f.y-24-tt*26);
+      ctx.globalAlpha=1;
+    });
+    state.floaters = state.floaters.filter(function(f){ return now-f.t0 < f.dur; });
+  }
+
+  function roundRect(c,x,y,w,h,r){
+    c.beginPath(); c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+    c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+  }
+  var varCache={};
+  function resolveVar(v){
+    if(varCache[v]) return varCache[v];
+    var name = v.slice(4,-1);
+    var val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    varCache[v]=val; return val;
+  }
+
+  // ---------- charts (fed by server tick history) ----------
+  function drawLatencyChart(){
+    var c = document.getElementById('chartLatency'); var g=c.getContext('2d');
+    var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
+    var hist = state.history; if(hist.length<2) return;
+    var maxV = Math.max(260, hist.reduce(function(m,h){return Math.max(m,h.p99);},0)*1.15);
+    function px(i){ return (i/(hist.length-1))*r.width; }
+    function py(v){ return r.height - (v/maxV)*r.height; }
+
+    g.strokeStyle='rgba(255,255,255,.1)'; g.setLineDash([4,4]); g.lineWidth=1;
+    g.beginPath(); g.moveTo(0,py(200)); g.lineTo(r.width,py(200)); g.stroke(); g.setLineDash([]);
+
+    [['p50','#656a7d'],['p95','#4fa3e3'],['p99','#e0912f']].forEach(function(pair){
+      g.beginPath(); g.strokeStyle=pair[1]; g.lineWidth=1.6;
+      hist.forEach(function(h,i){ var x=px(i), y=py(h[pair[0]]); i===0?g.moveTo(x,y):g.lineTo(x,y); });
+      g.stroke();
+    });
+  }
+
+  function drawRpsChart(){
+    var c = document.getElementById('chartRps'); var g=c.getContext('2d');
+    var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
+    var hist = state.history; if(hist.length<2) return;
+    var maxV = Math.max(40, hist.reduce(function(m,h){return Math.max(m,h.rps);},0)*1.2);
+    function px(i){ return (i/(hist.length-1))*r.width; }
+    function py(v){ return r.height - (v/maxV)*r.height; }
+    var grad = g.createLinearGradient(0,0,0,r.height);
+    grad.addColorStop(0,'rgba(79,163,227,.3)'); grad.addColorStop(1,'rgba(79,163,227,0)');
+    g.beginPath(); g.moveTo(0,r.height);
+    hist.forEach(function(h,i){ g.lineTo(px(i),py(h.rps)); });
+    g.lineTo(r.width,r.height); g.closePath(); g.fillStyle=grad; g.fill();
+    g.beginPath(); g.strokeStyle='#4fa3e3'; g.lineWidth=1.6;
+    hist.forEach(function(h,i){ var x=px(i),y=py(h.rps); i===0?g.moveTo(x,y):g.lineTo(x,y); });
+    g.stroke();
+  }
+
+  function drawErrStrip(){
+    var c = stripEl; var g=c.getContext('2d');
+    var r=c.getBoundingClientRect(); g.clearRect(0,0,r.width,r.height);
+    var hist = state.history; if(!hist.length) return;
+    var bw = r.width/Math.max(hist.length,24);
+    hist.forEach(function(h,i){
+      var e = h.err;
+      var col = e>8 ? '#e05468' : e>2 ? '#e0912f' : 'rgba(63,184,120,.5)';
+      g.fillStyle=col; g.fillRect(i*bw, 2, Math.max(bw-1.5,1), r.height-4);
+    });
+  }
+
+  function renderCostBreakdown(){
+    var bar = document.getElementById('costBar');
+    var legend = document.getElementById('costLegend');
+    var colors = {compute:'#8166e8',cache:'#4fa3e3',queue:'#6b7fd7',index:'#3fb878',database:'#e0912f'};
+    var labels = {compute:'Compute',cache:'Cache',queue:'Queue',index:'Index',database:'Database'};
+    var b = metrics.breakdown || {compute:1};
+    var total = Object.keys(b).reduce(function(s,k){return s+b[k];},0) || 1;
+    bar.innerHTML='';
+    legend.innerHTML='';
+    Object.keys(b).forEach(function(k){
+      var pct = (b[k]/total)*100;
+      if(pct<0.3) return;
+      var seg=document.createElement('div');
+      seg.style.width=pct+'%'; seg.style.background=colors[k]||'#888'; seg.style.height='100%';
+      bar.appendChild(seg);
+      var li=document.createElement('span');
+      li.innerHTML='<i style="background:'+(colors[k]||'#888')+'"></i>'+(labels[k]||k);
+      legend.appendChild(li);
+    });
+  }
+
+  function refreshTiles(){
+    document.getElementById('tileRps').innerHTML = Math.round(metrics.rps)+'<small> rps</small>';
+    document.getElementById('tileP95').innerHTML = Math.round(metrics.p95)+'<small> ms</small>';
+    document.getElementById('tileErr').innerHTML = metrics.err.toFixed(1)+'<small> %</small>';
+    state.costSmooth = lerp(state.costSmooth || metrics.cost, metrics.cost, 0.35);
+    document.getElementById('tileCost').innerHTML = '$'+state.costSmooth.toFixed(2)+'<small> /hr</small>';
+    document.getElementById('tileP95box').className = 'tile'+(metrics.p95>220?' bad':metrics.p95>120?' warn':' good');
+    document.getElementById('tileErrBox').className = 'tile'+(metrics.err>8?' bad':metrics.err>2?' warn':'');
+    document.getElementById('targetRps').textContent = Math.round(metrics.rps);
+    document.getElementById('inflight').textContent = state.inFlight;
+  }
+
+  function updateVerdict(){
+    var el = document.getElementById('verdictText');
+    var dot = document.getElementById('verdictDot');
+    var msg, color;
+    var t = state.toggles;
+    if(!state.running){ msg='<b>Ready.</b> Hit start to pour traffic into the pipeline.'; color='var(--flow)'; }
+    else if(t.limiter && metrics.dropRate>5){ msg='<b>Limiter is shedding load</b> ('+metrics.dropRate.toFixed(0)+'%) — throttling traffic to protect downstream services.'; color='var(--warn)'; }
+    else if(t.cache && metrics.rps>0){ msg='<b>Cache hit ratio '+Math.round(metrics.hitRatio*100)+'%</b> — p95 holding at <b>'+Math.round(metrics.p95)+'ms</b>.'; color='var(--good)'; }
+    else if(!t.index && metrics.p99>150){ msg='<b>Full table scans under load.</b> p99 at <b>'+Math.round(metrics.p99)+'ms</b> — try flipping the DB index on.'; color='var(--bad)'; }
+    else if(!t.queue && metrics.p95>150){ msg='<b>DB is taking requests synchronously.</b> Queueing would smooth this spike.'; color='var(--warn)'; }
+    else { msg = '<b>Steady state.</b> p95 <b>'+Math.round(metrics.p95)+'ms</b> · error rate <b>'+metrics.err.toFixed(1)+'%</b>.'; color='var(--flow)'; }
+    el.innerHTML = msg;
+    dot.style.background = color;
+  }
+
+  // ---------- render loop (independent of data arrival — stays smooth) ----------
+  function loop(now){
+    requestAnimationFrame(loop);
+    drawPipeline(now);
+    drawLatencyChart(); drawRpsChart(); drawErrStrip(); renderCostBreakdown();
+  }
+
+  // ---------- controls ----------
+  var profileSelect = document.getElementById('profileSelect');
+  var playBtn = document.getElementById('playBtn');
+
+  function postJson(url, body){
+    return fetch(url, { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body||{}) });
+  }
+
+  document.querySelectorAll('.toggle').forEach(function(el){
+    var k = el.getAttribute('data-k');
+    el.addEventListener('click', function(){
+      var next = !el.classList.contains('on');
+      el.classList.toggle('on', next);
+      var body = {}; body[k] = next;
+      postJson('/toggles', body).catch(function(){ el.classList.toggle('on', !next); });
+    });
+  });
+
+  playBtn.addEventListener('click', function(){
+    if(state.running) postJson('/run/stop');
+    else postJson('/run/start', {profile: profileSelect.value});
+  });
+
+  profileSelect.addEventListener('change', function(){
+    state.profile = profileSelect.value;
+    if(state.running) postJson('/run/start', {profile: profileSelect.value});
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    postJson('/run/stop');
+    state.particles=[]; state.floaters=[]; state.history=[]; state.events=[];
+    metrics = {rps:0,p50:0,p95:0,p99:0,err:0,dropRate:0,hitRatio:0,cost:0,breakdown:null};
+    state.costSmooth=0; state.startedAt=0;
+    refreshTiles();
+    document.getElementById('elapsed').textContent='00:00';
+    document.getElementById('timelineFill').style.width='0%';
+  });
+
+  function applyToggles(toggles){
+    if(!toggles) return;
+    state.toggles = toggles;
+    document.querySelectorAll('.toggle').forEach(function(el){
+      var k = el.getAttribute('data-k');
+      el.classList.toggle('on', !!toggles[k]);
+    });
+  }
+
+  function applyRunning(running, profile){
+    state.running = !!running;
+    if(profile){ state.profile = profile; profileSelect.value = profile; }
+    var chip = document.getElementById('statusChip');
+    chip.classList.toggle('live', state.running);
+    document.getElementById('statusText').textContent = state.running ? 'SIMULATING' : 'IDLE';
+    playBtn.textContent = state.running ? 'Pause' : 'Start test';
+    if(state.running && !state.startedAt) state.startedAt = Date.now();
+    if(!state.running) state.startedAt = 0;
+    document.getElementById('timelineFill').style.width = state.running ? '100%' : '0%';
+    updateVerdict();
+  }
+
+  setInterval(function(){
+    if(state.running && state.startedAt){
+      var sec = (Date.now()-state.startedAt)/1000;
+      var mm=Math.floor(sec/60), ss=Math.floor(sec%60);
+      document.getElementById('elapsed').textContent = String(mm).padStart(2,'0')+':'+String(ss).padStart(2,'0');
+    }
+  }, 500);
+
+  // ---------- WebSocket: the real data source ----------
+  var wsStatusEl = document.getElementById('wsStatus');
+  function connectWs(){
+    var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    var ws = new WebSocket(proto + '//' + location.host + '/ws');
+
+    ws.addEventListener('open', function(){ wsStatusEl.textContent = 'ws: connected'; });
+    ws.addEventListener('close', function(){ wsStatusEl.textContent = 'ws: reconnecting…'; setTimeout(connectWs, 1500); });
+    ws.addEventListener('error', function(){ ws.close(); });
+
+    ws.addEventListener('message', function(ev){
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch(e) { return; }
+
+      if(msg.type === 'snapshot'){
+        applyToggles(msg.toggles);
+        applyRunning(msg.running, msg.profile);
+      } else if(msg.type === 'tick'){
+        metrics.rps = msg.rps; metrics.p50 = msg.p50; metrics.p95 = msg.p95; metrics.p99 = msg.p99;
+        metrics.err = msg.err; metrics.dropRate = msg.dropRate; metrics.hitRatio = msg.hitRatio;
+        metrics.cost = msg.cost; metrics.breakdown = msg.breakdown;
+        state.inFlight = msg.inFlight;
+        applyToggles(msg.toggles);
+        state.history.push({t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99});
+        if(state.history.length>72) state.history.shift();
+        refreshTiles();
+        updateVerdict();
+      } else if(msg.type === 'event'){
+        spawnFromEvent(msg.outcome, msg.ms);
+      } else if(msg.type === 'toggles'){
+        applyToggles(msg.toggles);
+        updateVerdict();
+      } else if(msg.type === 'state'){
+        applyRunning(msg.running, msg.profile);
+      }
+    });
+  }
+
+  resizeAll();
+  requestAnimationFrame(loop);
+  connectWs();
+})();
+</script>
+</body>
+</html>
