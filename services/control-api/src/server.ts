@@ -5,6 +5,7 @@ import cors from "@fastify/cors";
 import staticPlugin from "@fastify/static";
 import { LoadEngine, Toggles } from "./loadEngine";
 import { Profile } from "./profiles";
+import { parseTarget, publicTarget } from "./target";
 
 const TARGET_URL = process.env.TARGET_API_URL || "http://localhost:3000";
 const ROW_COUNT = Number(process.env.ROW_COUNT || 1_000_000);
@@ -42,6 +43,7 @@ async function main() {
           running: engine.running,
           profile: engine.profile,
           toggles: engine.toggles,
+          target: publicTarget(engine.target),
         })
       );
       socket.on("close", () => sockets.delete(socket));
@@ -52,16 +54,33 @@ async function main() {
     running: engine.running,
     profile: engine.profile,
     toggles: engine.toggles,
+    target: publicTarget(engine.target),
   }));
+
+  app.get("/target", async () => publicTarget(engine.target));
+
+  app.post<{ Body: unknown }>("/target", async (req, reply) => {
+    if (engine.running) {
+      return reply.code(409).send({ ok: false, error: "Stop the current run before changing the target" });
+    }
+    const parsed = parseTarget(req.body, engine.target);
+    if (!parsed.ok) return reply.code(400).send({ ok: false, error: parsed.error });
+    engine.setTarget(parsed.config);
+    const view = publicTarget(engine.target);
+    broadcast({ type: "target", target: view });
+    return { ok: true, target: view };
+  });
 
   app.post<{ Body: { profile: Profile } }>("/run/start", async (req) => {
     const profile = req.body?.profile || "spike";
     engine.stop();
-    // fresh cache/queue so back-to-back runs are comparable
-    await fetch(`${TARGET_URL}/admin/reset`, {
-      method: "POST",
-      signal: AbortSignal.timeout(3000),
-    }).catch(() => undefined);
+    if (engine.target.mode === "lab") {
+      // fresh cache/queue so back-to-back runs are comparable
+      await fetch(`${TARGET_URL}/admin/reset`, {
+        method: "POST",
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => undefined);
+    }
     engine.start(profile);
     broadcast({ type: "state", running: true, profile });
     return { ok: true, profile: engine.profile };
@@ -76,7 +95,7 @@ async function main() {
   app.post<{ Body: Partial<Toggles> }>("/toggles", async (req) => {
     const body = req.body || {};
     engine.setToggles(body);
-    await fetch(`${TARGET_URL}/admin/toggles`, {
+    if (engine.target.mode === "lab") await fetch(`${TARGET_URL}/admin/toggles`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

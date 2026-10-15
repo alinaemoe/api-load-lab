@@ -4,6 +4,19 @@ function clamp(v: number, a: number, b: number) {
   return Math.max(a, Math.min(b, v));
 }
 
+const PROFILE_PEAK: Record<Profile, number> = {
+  constant: 70,
+  ramp: 260,
+  spike: 330,
+  stress: 520,
+  soak: 95,
+};
+
+// 0..1 shape of a profile, so custom targets can scale it to their own peak rps
+export function shapeAt(profile: Profile, t: number): number {
+  return targetRps(profile, t) / (PROFILE_PEAK[profile] || 100);
+}
+
 export function targetRps(profile: Profile, t: number): number {
   switch (profile) {
     case "constant":
