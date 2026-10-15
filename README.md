@@ -36,7 +36,7 @@ seconds).
 | `target-api` | http://localhost:3000 | The system under test (Postgres + Redis + BullMQ) |
 | `worker` | - | Processes queued lookups |
 
-Rebuilds are fast: the Dockerfiles use a BuildKit npm cache mount.
+The Dockerfiles use a BuildKit npm cache mount, so dependency installs are cached between rebuilds.
 
 ## Using it
 
