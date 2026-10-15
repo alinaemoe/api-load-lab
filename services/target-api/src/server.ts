@@ -3,6 +3,7 @@ import { pool } from "./db";
 import { redis } from "./redis";
 import { createTokenBucket } from "./limiter";
 import { lookupQueue, queueEvents } from "./queue";
+import { registerProxy, proxyReset, proxyQueueCounts } from "./proxy";
 
 type Toggles = {
   cache: boolean;
@@ -22,6 +23,7 @@ const CACHE_TTL_SEC = 15;
 const bucket = createTokenBucket(150, 150);
 
 const app = Fastify({ logger: false });
+registerProxy(app, { toggles, allow: () => bucket.allow() });
 
 app.get("/healthz", async () => ({ ok: true }));
 
@@ -29,7 +31,8 @@ app.get("/admin/state", async () => ({ toggles }));
 
 app.get("/admin/queue", async () => {
   const c = await lookupQueue.getJobCounts("waiting", "active", "delayed");
-  return { waiting: c.waiting + c.delayed, active: c.active };
+  const p = await proxyQueueCounts();
+  return { waiting: c.waiting + c.delayed + p.waiting, active: c.active + p.active };
 });
 
 // Clean slate between comparison runs: drop cached products and queued jobs.
@@ -43,6 +46,7 @@ app.post("/admin/reset", async () => {
     if (keys.length) removed += await redis.del(...keys);
   } while (cursor !== "0");
   await lookupQueue.drain(true);
+  removed += await proxyReset();
   return { ok: true, cacheKeysRemoved: removed };
 });
 

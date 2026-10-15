@@ -24,6 +24,8 @@ const CHROME = [
 ].find((p) => p && existsSync(p));
 if (!CHROME) throw new Error("No Chrome/Edge found - set CHROME_PATH");
 
+const ONLY = process.env.ONLY ? process.env.ONLY.split(",") : null; // e.g. ONLY=proxy,queue
+const want = (name) => !ONLY || ONLY.includes(name);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function api(p, body) {
@@ -142,63 +144,96 @@ try {
     mobile: false,
   });
 
-  // 1. lab, live run with cache on
-  await resetStack();
-  await load();
-  await startRun("spike");
-  await sleep(21000);
-  await shot("lab-live");
-  await stopRun();
+  if (want("lab")) {
+    // 1. lab, live run with cache on
+    await resetStack();
+    await load();
+    await startRun("spike");
+    await sleep(21000);
+    await shot("lab-live");
+    await stopRun();
+  }
 
-  // 2. race mode: bare run saved as ghost A, then cache + index as live run B
-  await resetStack();
-  await api("/toggles", { cache: false, limiter: false, queue: false, index: false });
-  await load();
-  await startRun("spike");
-  await sleep(24000);
-  await ev("document.getElementById('saveABtn').click(); 1");
-  await stopRun();
-  await sleep(500);
-  await api("/toggles", { cache: true, limiter: true, queue: false, index: true });
-  await sleep(500);
-  await startRun("spike");
-  await sleep(24000);
-  await shot("race-ab");
-  await stopRun();
-  await sleep(800);
-  await ev(`(function(){
-    var tl=document.getElementById('timeline'), r=tl.getBoundingClientRect();
-    function e(t){ tl.dispatchEvent(new PointerEvent(t,{clientX:r.left+r.width*0.78,clientY:r.top+4,pointerId:1,bubbles:true})); }
-    e('pointerdown'); e('pointerup'); return 1; })()`);
-  await shot("scrubber");
+  if (want("race")) {
+    // 2. race mode: bare run saved as ghost A, then cache + index as live run B
+    await resetStack();
+    await api("/toggles", { cache: false, limiter: false, queue: false, index: false });
+    await load();
+    await startRun("spike");
+    await sleep(24000);
+    await ev("document.getElementById('saveABtn').click(); 1");
+    await stopRun();
+    await sleep(500);
+    await api("/toggles", { cache: true, limiter: true, queue: false, index: true });
+    await sleep(500);
+    await startRun("spike");
+    await sleep(24000);
+    await shot("race-ab");
+    await stopRun();
+    await sleep(800);
+    await ev(`(function(){
+      var tl=document.getElementById('timeline'), r=tl.getBoundingClientRect();
+      function e(t){ tl.dispatchEvent(new PointerEvent(t,{clientX:r.left+r.width*0.78,clientY:r.top+4,pointerId:1,bubbles:true})); }
+      e('pointerdown'); e('pointerup'); return 1; })()`);
+    await shot("scrubber");
+  }
 
-  // 3. queue backlog under stress
-  await resetStack();
-  await api("/toggles", { cache: false, limiter: false, queue: true, index: false });
-  await load();
-  await startRun("stress");
-  await sleep(50000);
-  await shot("queue-backlog");
-  await stopRun();
+  if (want("queue")) {
+    // 3. queue backlog under stress
+    await resetStack();
+    await api("/toggles", { cache: false, limiter: false, queue: true, index: false });
+    await load();
+    await startRun("stress");
+    await sleep(50000);
+    await shot("queue-backlog");
+    await stopRun();
+  }
 
-  // 4. custom endpoints
-  await resetStack();
-  await api("/target", {
-    mode: "custom",
-    baseUrl: "http://target-api:3000",
-    endpoints: [
-      { method: "GET", path: "/products/SKU-{id:7}", weight: 8 },
-      { method: "GET", path: "/healthz", weight: 2 },
-      { method: "GET", path: "/no-such-route", weight: 1 },
-    ],
-    peakRps: 80,
-  });
-  await load();
-  await ev("document.getElementById('targetCard').open=true; 1");
-  await startRun("constant");
-  await sleep(14000);
-  await shot("custom-target");
-  await stopRun();
+  if (want("custom")) {
+    // 4. custom endpoints
+    await resetStack();
+    await api("/target", {
+      mode: "custom",
+      baseUrl: "http://target-api:3000",
+      endpoints: [
+        { method: "GET", path: "/products/SKU-{id:7}", weight: 8 },
+        { method: "GET", path: "/healthz", weight: 2 },
+        { method: "GET", path: "/no-such-route", weight: 1 },
+      ],
+      peakRps: 80,
+    });
+    await load();
+    await ev("document.getElementById('targetCard').open=true; 1");
+    await startRun("constant");
+    await sleep(14000);
+    await shot("custom-target");
+    await stopRun();
+  }
+
+  if (want("proxy")) {
+    // 5. lab proxy in front of a slow upstream: cache switched on mid-run
+    await resetStack();
+    await api("/target", {
+      mode: "custom",
+      baseUrl: "http://target-api:3000",
+      endpoints: [{ method: "GET", path: "/demo/slow?ms=250&k={id}", weight: 1 }],
+      idMin: 1,
+      idMax: 50,
+      hotRatio: 0.8,
+      peakRps: 60,
+      viaProxy: true,
+      proxyTtlSec: 30,
+      proxyConcurrency: 5,
+    });
+    await api("/toggles", { cache: false, queue: false, limiter: false });
+    await load();
+    await startRun("constant");
+    await sleep(10000);
+    await api("/toggles", { cache: true });
+    await sleep(11000);
+    await shot("proxy");
+    await stopRun();
+  }
 } finally {
   await resetStack().catch(() => undefined);
   ws.close();

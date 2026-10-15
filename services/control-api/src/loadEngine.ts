@@ -48,6 +48,8 @@ export class LoadEngine {
   private hotSet: string[] = [];
   private customHot: number[] = [];
   private inFlight = 0;
+  private runId = 0;
+  private aborters = new Set<AbortController>();
   private maxConcurrency = 150;
   private spawnAcc = 0;
   private startedAt = 0;
@@ -110,6 +112,8 @@ export class LoadEngine {
   start(profile: Profile) {
     this.profile = profile;
     this.running = true;
+    this.runId++;
+    this.inFlight = 0;
     this.t = 0;
     this.spawnAcc = 0;
     this.maxConcurrency = this.target.mode === "custom" ? 100 : 150;
@@ -122,6 +126,9 @@ export class LoadEngine {
 
   stop() {
     this.running = false;
+    // cut off requests still in flight so they can't leak into the next run
+    this.aborters.forEach((a) => a.abort());
+    this.aborters.clear();
     if (this.loopHandle) clearTimeout(this.loopHandle);
     if (this.secHandle) clearInterval(this.secHandle);
   }
@@ -157,6 +164,14 @@ export class LoadEngine {
     const ep = pickEndpoint(cfg.endpoints);
     const e = cfg.endpoints[ep];
     const id = this.pickId();
+    if (cfg.viaProxy) {
+      // upstream URL and headers live in target-api; we only send the path
+      return {
+        url: `${this.targetUrl}/proxy${expand(e.path, id)}`,
+        init: { signal: AbortSignal.timeout(cfg.timeoutMs) },
+        ep,
+      };
+    }
     const headers: Record<string, string> = { ...cfg.headers };
     const hasBody = e.body !== "" && e.method !== "GET" && e.method !== "HEAD";
     if (hasBody && !Object.keys(headers).some((h) => h.toLowerCase() === "content-type")) {
@@ -176,12 +191,20 @@ export class LoadEngine {
 
   private async fireRequest() {
     this.inFlight++;
-    const { url, init, ep } = this.buildRequest();
+    const runId = this.runId;
+    const { url, init: baseInit, ep } = this.buildRequest();
+    const ctrl = new AbortController();
+    this.aborters.add(ctrl);
+    const init: RequestInit = {
+      ...baseInit,
+      signal: baseInit.signal ? AbortSignal.any([baseInit.signal, ctrl.signal]) : ctrl.signal,
+    };
     const t0 = performance.now();
     try {
       const res = await fetch(url, init);
       await res.arrayBuffer().catch(() => undefined); // include the body download in the timing
       const ms = performance.now() - t0;
+      if (runId !== this.runId || !this.running) return;
       if (res.status === 429) {
         this.record({ ms, outcome: "drop", ep });
       } else if (!res.ok) {
@@ -191,10 +214,12 @@ export class LoadEngine {
         this.record({ ms, outcome: hit ? "hit" : "ok", ep });
       }
     } catch {
+      if (runId !== this.runId || !this.running) return;
       const ms = performance.now() - t0;
       this.record({ ms, outcome: "error", ep });
     } finally {
-      this.inFlight--;
+      this.aborters.delete(ctrl);
+      if (runId === this.runId) this.inFlight--;
     }
   }
 
@@ -225,7 +250,8 @@ export class LoadEngine {
   }
 
   private async fetchQueueStats() {
-    if (this.target.mode !== "lab" || !this.toggles.queue) return { waiting: 0, active: 0 };
+    const labLike = this.target.mode === "lab" || this.target.viaProxy;
+    if (!labLike || !this.toggles.queue) return { waiting: 0, active: 0 };
     try {
       const res = await fetch(`${this.targetUrl}/admin/queue`, {
         signal: AbortSignal.timeout(800),

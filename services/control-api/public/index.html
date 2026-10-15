@@ -118,7 +118,8 @@ button[hidden],.block[hidden]{display:none}
 .cmp .better{color:#3fb878}.cmp .worse{color:#e05468}
 .cmp .cfg{font-size:10.5px;color:var(--fg-faint);margin:0 0 6px}
 [hidden]{display:none!important}
-.mode-custom .toggle-row,.mode-custom .cost-only{display:none}
+.mode-custom:not(.mode-proxy) .toggle-row,.mode-custom .cost-only{display:none}
+.mode-proxy .toggle[data-k="index"]{display:none}
 .target-card{background:var(--bg2);border:1px solid var(--line);border-radius:10px}
 .target-card>summary{list-style:none;cursor:pointer;padding:11px 16px;display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--fg-dim)}
 .target-card>summary::-webkit-details-marker{display:none}
@@ -231,6 +232,12 @@ fieldset.lock:disabled{opacity:.55}
             <label class="field">Timeout ms<input id="tgtTimeout" type="number" min="200" max="30000" value="10000"></label>
           </div>
 
+          <label class="check"><input type="checkbox" id="tgtProxy"><span><b>Route through the lab proxy</b> to model infrastructure in front of this API: a real Redis cache, rate limiter and a queue with a bounded number of workers, all switchable live. GET endpoints only.</span></label>
+          <div class="tgt-grid" id="proxyOpts" hidden>
+            <label class="field">Cache TTL, s<input id="tgtTtl" type="number" min="1" max="3600" value="15"></label>
+            <label class="field">Queue workers (upstream concurrency)<input id="tgtWorkers" type="number" min="1" max="50" value="5"></label>
+          </div>
+
           <label class="check"><input type="checkbox" id="tgtConfirm"><span>I own this API or have permission to load-test it. (Required for any host that is not local.)</span></label>
         </fieldset>
         <div class="tgt-actions" style="margin-top:12px">
@@ -322,6 +329,7 @@ fieldset.lock:disabled{opacity:.55}
     {k:'clients', x:0.1, label:'Clients', toggle:null},
     {k:'target', x:0.9, label:'Your API', toggle:null, abbr:'API'}
   ];
+  var PROXY_NODES = LAB_NODES.slice(0,5).concat([{k:'db', x:0.91, label:'Upstream API', toggle:null, abbr:'UP'}]);
   var NODES = LAB_NODES;
 
   var state = {
@@ -330,7 +338,7 @@ fieldset.lock:disabled{opacity:.55}
     particles:[], floaters:[], nodeLoad:{}, history:[], events:[],
     costSmooth:0, startedAt:0, inFlight:0,
     runTicks:[], ghost:null, scrub:null,
-    mode:'lab', target:null
+    mode:'lab', target:null, proxy:false
   };
   LAB_NODES.concat(CUSTOM_NODES).forEach(function(n){ state.nodeLoad[n.k]=0; });
 
@@ -368,7 +376,7 @@ fieldset.lock:disabled{opacity:.55}
   }
 
   function pathFor(outcome, toggles){
-    if(state.mode==='custom') return {xs:[CUSTOM_NODES[0].x, CUSTOM_NODES[1].x], stages:['clients','target']};
+    if(state.mode==='custom' && !state.proxy) return {xs:[CUSTOM_NODES[0].x, CUSTOM_NODES[1].x], stages:['clients','target']};
     var xs=[NODES[0].x, NODES[1].x], stages=['clients','limiter'];
     if(outcome==='drop') return {xs:xs, stages:stages};
     xs.push(NODES[2].x); stages.push('api');
@@ -481,7 +489,7 @@ fieldset.lock:disabled{opacity:.55}
         ctx.globalAlpha=1;
       }
 
-      if(n.k==='db' && state.toggles.index){
+      if(n.k==='db' && state.toggles.index && !state.proxy){
         ctx.fillStyle='rgba(63,184,120,.16)'; ctx.strokeStyle='#3fb878'; ctx.lineWidth=1;
         roundRect(ctx, x-13, midY-r-16, 26, 12, 5); ctx.fill(); ctx.stroke();
         ctx.fillStyle='#3fb878'; ctx.font='600 8px IBM Plex Mono, monospace'; ctx.fillText('IDX', x, midY-r-10);
@@ -592,9 +600,9 @@ fieldset.lock:disabled{opacity:.55}
   var clearABtn = document.getElementById('clearABtn');
   try { var saved = localStorage.getItem(GHOST_KEY); if(saved) state.ghost = JSON.parse(saved); } catch(e) {}
 
-  function cfgLabel(tg){
+  function cfgLabel(tg, noIndex){
     if(!tg) return '-';
-    var on = ['limiter','cache','queue','index'].filter(function(k){ return tg[k]; });
+    var on = ['limiter','cache','queue','index'].filter(function(k){ return tg[k] && !(noIndex && k==='index'); });
     return on.length ? on.join(' + ') : 'bare';
   }
   function ghostAt(i){ return state.ghost && state.ghost.ticks[i]; }
@@ -761,8 +769,9 @@ fieldset.lock:disabled{opacity:.55}
     else if(state.mode==='custom'){
       if(metrics.err>5){ msg='<b>'+metrics.err.toFixed(0)+'% of requests are failing.</b> Check the base URL, paths and headers (per-endpoint table shows which one).'; color='var(--bad)'; }
       else if(metrics.dropRate>5){ msg='<b>Target is rate-limiting you</b> ('+metrics.dropRate.toFixed(0)+'% HTTP 429) - lower the peak rps or ask for a higher quota.'; color='var(--warn)'; }
+      else if(state.proxy && state.queueDepth>20){ msg='<b>Queue backlog '+state.queueDepth+'.</b> Upstream concurrency is the bottleneck - add workers or turn the cache on.'; color='var(--warn)'; }
       else if(metrics.p95>800){ msg='<b>Slow under load.</b> p95 <b>'+Math.round(metrics.p95)+'ms</b>, p99 <b>'+Math.round(metrics.p99)+'ms</b>.'; color='var(--bad)'; }
-      else { msg='<b>Steady.</b> p95 <b>'+Math.round(metrics.p95)+'ms</b> at <b>'+Math.round(metrics.rps)+' rps</b>, errors <b>'+metrics.err.toFixed(1)+'%</b>.'; color='var(--flow)'; }
+      else { msg='<b>Steady.</b> p95 <b>'+Math.round(metrics.p95)+'ms</b> at <b>'+Math.round(metrics.rps)+' rps</b>, errors <b>'+metrics.err.toFixed(1)+'%</b>.'+(state.proxy && state.toggles.cache ? ' Cache hit ratio <b>'+Math.round(metrics.hitRatio*100)+'%</b>.' : ''); color='var(--flow)'; }
     }
     else if(t.limiter && metrics.dropRate>5){ msg='<b>Limiter is shedding load</b> ('+metrics.dropRate.toFixed(0)+'%) — throttling traffic to protect downstream services.'; color='var(--warn)'; }
     else if(t.cache && metrics.rps>0){ msg='<b>Cache hit ratio '+Math.round(metrics.hitRatio*100)+'%</b> — p95 holding at <b>'+Math.round(metrics.p95)+'ms</b>.'; color='var(--good)'; }
@@ -882,6 +891,7 @@ fieldset.lock:disabled{opacity:.55}
     });
     epList.appendChild(row);
   }
+  $('tgtProxy').addEventListener('change', function(){ $('proxyOpts').hidden = !this.checked; });
   $('addEp').addEventListener('click', function(){ addEpRow(); tgtDirty = true; });
   addEpRow();
 
@@ -918,7 +928,8 @@ fieldset.lock:disabled{opacity:.55}
     var body = {mode:'custom', baseUrl: $('tgtBase').value.trim(), endpoints: eps,
       idMin: Number($('tgtIdMin').value), idMax: Number($('tgtIdMax').value),
       hotRatio: Number($('tgtHot').value)/100, peakRps: Number($('tgtPeak').value),
-      timeoutMs: Number($('tgtTimeout').value), confirmed: $('tgtConfirm').checked};
+      timeoutMs: Number($('tgtTimeout').value), confirmed: $('tgtConfirm').checked,
+      viaProxy: $('tgtProxy').checked, proxyTtlSec: Number($('tgtTtl').value), proxyConcurrency: Number($('tgtWorkers').value)};
     if(headersTouched) body.headers = parseHeaders();
     return body;
   }
@@ -968,20 +979,25 @@ fieldset.lock:disabled{opacity:.55}
     $('tgtHot').value = Math.round((t.hotRatio==null?0.8:t.hotRatio)*100);
     $('tgtPeak').value = t.peakRps; $('tgtTimeout').value = t.timeoutMs;
     $('tgtConfirm').checked = !!t.confirmed;
+    $('tgtProxy').checked = !!t.viaProxy;
+    $('tgtTtl').value = t.proxyTtlSec || 15; $('tgtWorkers').value = t.proxyConcurrency || 5;
+    $('proxyOpts').hidden = !t.viaProxy;
   }
 
   function applyTargetView(t){
     if(!t) return;
-    var changed = state.mode !== t.mode;
-    state.target = t; state.mode = t.mode;
+    var proxy = t.mode==='custom' && !!t.viaProxy;
+    var changed = state.mode !== t.mode || state.proxy !== proxy;
+    state.target = t; state.mode = t.mode; state.proxy = proxy;
     document.body.classList.toggle('mode-custom', t.mode==='custom');
-    NODES = t.mode==='custom' ? CUSTOM_NODES : LAB_NODES;
+    document.body.classList.toggle('mode-proxy', proxy);
+    NODES = t.mode==='custom' ? (proxy ? PROXY_NODES : CUSTOM_NODES) : LAB_NODES;
     if(changed){ state.particles = []; state.floaters = []; }
     savedHeaderNames = t.headerNames || [];
     $('tgtHeaders').placeholder = savedHeaderNames.length ? 'Saved on server: '+savedHeaderNames.join(', ')+' (type here to replace)' : 'Authorization: Bearer ...';
     if(t.mode==='custom'){
       fillForm(t); tgtDirty = false;
-      $('targetSummary').textContent = targetHost()+' · '+t.endpoints.length+' endpoint'+(t.endpoints.length>1?'s':'')+' · peak '+t.peakRps+' rps';
+      $('targetSummary').textContent = targetHost()+' · '+t.endpoints.length+' endpoint'+(t.endpoints.length>1?'s':'')+' · peak '+t.peakRps+' rps'+(t.viaProxy ? ' · via lab proxy' : '');
     } else {
       $('targetSummary').textContent = 'Built-in lab (Postgres + Redis + BullMQ)';
     }
@@ -1032,7 +1048,7 @@ fieldset.lock:disabled{opacity:.55}
         state.inFlight = msg.inFlight;
         state.queueDepth = msg.queueDepth || 0; state.queueActive = msg.queueActive || 0;
         applyToggles(msg.toggles);
-        var rec = {t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99, dropRate:msg.dropRate, cost:msg.cost, toggles:msg.toggles, mode:msg.mode, endpoints:msg.endpoints||[], label: msg.mode==='custom' ? 'custom: '+targetHost() : cfgLabel(msg.toggles)};
+        var rec = {t:msg.t, rps:msg.rps, err:msg.err, p50:msg.p50, p95:msg.p95, p99:msg.p99, dropRate:msg.dropRate, cost:msg.cost, toggles:msg.toggles, mode:msg.mode, endpoints:msg.endpoints||[], label: msg.mode==='custom' ? 'custom: '+targetHost()+(state.proxy ? ' via proxy ['+cfgLabel(msg.toggles, true)+']' : '') : cfgLabel(msg.toggles)};
         state.runTicks.push(rec);
         if(state.runTicks.length>900) state.runTicks.shift();
         state.history.push(rec);

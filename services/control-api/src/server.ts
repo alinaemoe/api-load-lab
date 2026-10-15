@@ -65,7 +65,25 @@ async function main() {
     }
     const parsed = parseTarget(req.body, engine.target);
     if (!parsed.ok) return reply.code(400).send({ ok: false, error: parsed.error });
-    engine.setTarget(parsed.config);
+    const cfg = parsed.config;
+    try {
+      const res = await fetch(`${TARGET_URL}/admin/upstream`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          cfg.mode === "custom" && cfg.viaProxy
+            ? { baseUrl: cfg.baseUrl, headers: cfg.headers, ttlSec: cfg.proxyTtlSec, concurrency: cfg.proxyConcurrency }
+            : { clear: true }
+        ),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error(`target-api answered ${res.status}`);
+    } catch (err) {
+      if (cfg.viaProxy) {
+        return reply.code(502).send({ ok: false, error: `Lab backend (target-api) is not reachable: ${(err as Error).message}` });
+      }
+    }
+    engine.setTarget(cfg);
     const view = publicTarget(engine.target);
     broadcast({ type: "target", target: view });
     return { ok: true, target: view };
@@ -74,7 +92,7 @@ async function main() {
   app.post<{ Body: { profile: Profile } }>("/run/start", async (req) => {
     const profile = req.body?.profile || "spike";
     engine.stop();
-    if (engine.target.mode === "lab") {
+    if (engine.target.mode === "lab" || engine.target.viaProxy) {
       // fresh cache/queue so back-to-back runs are comparable
       await fetch(`${TARGET_URL}/admin/reset`, {
         method: "POST",
@@ -95,7 +113,7 @@ async function main() {
   app.post<{ Body: Partial<Toggles> }>("/toggles", async (req) => {
     const body = req.body || {};
     engine.setToggles(body);
-    if (engine.target.mode === "lab") await fetch(`${TARGET_URL}/admin/toggles`, {
+    if (engine.target.mode === "lab" || engine.target.viaProxy) await fetch(`${TARGET_URL}/admin/toggles`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

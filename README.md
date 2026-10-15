@@ -15,6 +15,7 @@ BullMQ. Only the "infra cost" figure is a model (there is no cloud bill to read 
 |---|---|
 | **Built-in lab** | 1M-row Postgres table behind a Fastify API. Toggle a Redis cache, a DB index (a real `CREATE INDEX`), a BullMQ queue with workers, and a token-bucket rate limiter - while traffic is flowing. |
 | **Custom endpoints** | Test any HTTP API from the UI: base URL, several endpoints with weights, headers, `{id}` / `{uuid}` placeholders, peak rps. Per-endpoint rps / p95 / error table. |
+| **Lab proxy** | Put the lab's real Redis cache, rate limiter and bounded queue **in front of any GET API** and ask "what if this endpoint had a 30 s cache?" with real measurements. Toggle the pieces live. |
 | **Race mode (A vs B)** | Save a run as the dashed *ghost A*, change the config, run again, and compare p95, p99, errors, rps and cost side by side. State is reset between runs so the comparison is fair. |
 | **Timeline scrubber** | Drag the footer timeline (or use the arrow keys) to inspect any second of a run - live or after it stops. Charts, tiles and the readout follow the cursor. |
 | **Queue backlog** | The Queue node shows the real BullMQ backlog and active jobs, and turns red as it grows. |
@@ -80,6 +81,39 @@ Open **Target -> Custom endpoints**, fill in the form, **Apply target**, start a
 Reading the results: HTTP 429 counts as *rate-limited* (drops), any other 4xx/5xx or network error
 or timeout counts as an *error*. The per-endpoint table shows which endpoint is failing or slow.
 
+### 4. What if this API had a cache in front of it? (lab proxy)
+
+A black-box API can't be changed from the outside - you can only measure it. The lab proxy answers
+the "what if" question for real instead of simulating it: tick **Route through the lab proxy** in the
+custom form and requests go `control-api -> target-api /proxy -> your API`. In between sit the same
+switchable pieces as the built-in lab:
+
+- **Rate limiter** - token bucket in front of the upstream.
+- **Cache** - Redis read-through keyed by path + query, TTL configurable (default 15 s).
+- **Queue + workers** - BullMQ with a bounded number of workers (*upstream concurrency*, default 5).
+  Throughput is capped at `workers / upstream latency`; the rest becomes a visible backlog.
+
+Flip the toggles while traffic flows, or save a run as ghost A and compare. The headline
+numbers still come from real round trips.
+
+![Lab proxy: cache switched on mid-run in front of a slow upstream](docs/screenshots/proxy.png)
+
+`target-api` ships a deliberately slow stub (`/demo/slow?ms=250&k=7`) so you can try this without a
+third-party API: base URL `http://target-api:3000`, path `/demo/slow?ms=250&k={id}`, ids 1-50.
+Measured on that stub at 60 rps (constant profile):
+
+| Config | p95 | Notes |
+|---|---|---|
+| no cache, no queue | ~290 ms | every request waits for the upstream |
+| cache on | ~4 ms | ~100% hit ratio |
+| queue only (5 workers) | ~5 s | capped at ~20 rps, backlog grows |
+| cache + queue | ~3 ms | |
+
+Limits of this mode: **GET only** (responses are cached and replayed), upstream headers are fixed
+per target and not forwarded from clients, cached answers can be up to *TTL* seconds stale, and
+bodies over 1 MB are not forwarded. Your upstream receives real requests from the lab, so the same
+ownership/permission rules as the rest of custom mode apply.
+
 **Guardrails.** This tool can generate real traffic, so it is deliberately conservative:
 only `http(s)` URLs, peak rps capped at 300 and 100 concurrent requests, at most 10 endpoints,
 link-local addresses (cloud metadata) are rejected, and any host that is not local/private requires
@@ -92,7 +126,7 @@ explicitly allowed to test.
  browser (dashboard, canvas, charts)
      |  HTTP + WebSocket
  control-api :4000 ----- load generator + metrics (p50/p95/p99, rps, errors)
-     |  GET /products/...          |  your endpoints (custom mode)
+     |  GET /products/...          |  your endpoints (custom mode, direct or via /proxy)
  target-api :3000  -- toggles -->  Redis cache | BullMQ queue -> worker | token-bucket limiter
      |
  Postgres (1M rows, optional index)
@@ -108,8 +142,8 @@ explicitly allowed to test.
 |---|---|---|---|
 | `POST` | `/run/start` | `{ "profile": "spike" }` | Resets cache/queue first (lab mode). |
 | `POST` | `/run/stop` | | |
-| `POST` | `/toggles` | `{ "cache": true, "queue": false, "index": true, "limiter": true }` | Lab mode; forwarded to `target-api`. |
-| `GET/POST` | `/target` | `{ "mode": "lab" }` or `{ "mode": "custom", "baseUrl", "endpoints": [...], ... }` | `409` while a run is active, `400` with a message when invalid. |
+| `POST` | `/toggles` | `{ "cache": true, "queue": false, "index": true, "limiter": true }` | Lab mode and lab-proxy mode; forwarded to `target-api`. (`index` only affects the built-in lab.) |
+| `GET/POST` | `/target` | `{ "mode": "lab" }` or `{ "mode": "custom", "baseUrl", "endpoints": [...], "viaProxy": true, "proxyTtlSec": 15, "proxyConcurrency": 5, ... }` | `409` while a run is active, `400` with a message when invalid. |
 | `GET` | `/state` | | Current run, toggles and target. |
 
 ### WebSocket `ws://localhost:4000/ws`
@@ -130,6 +164,7 @@ cost, breakdown, endpoints[{label, rps, err, drop, p95}], toggles`.
 ## Known limitations
 
 - Percentiles are computed over the last 400 samples, not an exact per-second window.
+- Headline p95 lags a few seconds behind a change (it covers the last 400 requests); the per-endpoint table is last-second and reacts immediately.
 - The generator caps in-flight requests (150 lab / 100 custom). Under heavy overload it sends less
   than the target rate instead of queueing (a form of coordinated omission), so treat very high
   latencies as "the system is saturated", not as an exact figure.

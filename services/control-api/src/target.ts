@@ -13,6 +13,9 @@ export type TargetConfig = {
   peakRps: number;
   timeoutMs: number;
   confirmed: boolean;
+  viaProxy: boolean;
+  proxyTtlSec: number;
+  proxyConcurrency: number;
 };
 
 export const LAB_TARGET: TargetConfig = {
@@ -26,6 +29,9 @@ export const LAB_TARGET: TargetConfig = {
   peakRps: 50,
   timeoutMs: 10_000,
   confirmed: false,
+  viaProxy: false,
+  proxyTtlSec: 15,
+  proxyConcurrency: 5,
 };
 
 export const LIMITS = { maxPeakRps: 300, maxEndpoints: 10, maxHeaders: 10 };
@@ -116,6 +122,11 @@ export function parseTarget(raw: any, prev: TargetConfig): ParseResult {
   const idMax = Math.floor(num(raw.idMax, 1_000_000, 0, Number.MAX_SAFE_INTEGER));
   if (idMin > idMax) return { ok: false, error: "ID range: min must be <= max" };
 
+  const viaProxy = raw.viaProxy === true;
+  if (viaProxy && endpoints.some((e) => e.method !== "GET")) {
+    return { ok: false, error: "The lab proxy supports GET endpoints only (responses are cached and replayed)" };
+  }
+
   const basePath = url.pathname.replace(/\/+$/, "");
   return {
     ok: true,
@@ -130,6 +141,9 @@ export function parseTarget(raw: any, prev: TargetConfig): ParseResult {
       peakRps: Math.floor(num(raw.peakRps, 50, 1, LIMITS.maxPeakRps)),
       timeoutMs: Math.floor(num(raw.timeoutMs, 10_000, 200, 30_000)),
       confirmed,
+      viaProxy,
+      proxyTtlSec: Math.floor(num(raw.proxyTtlSec, 15, 1, 3600)),
+      proxyConcurrency: Math.floor(num(raw.proxyConcurrency, 5, 1, 50)),
     },
   };
 }
