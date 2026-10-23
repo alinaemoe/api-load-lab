@@ -1,8 +1,17 @@
 # API Load Lab
 
+**Don't guess what a cache, an index or a queue would do to your API. Switch it on while traffic is flowing and watch the p95 move.**
+
 A live load-testing playground. Pour traffic into an API, watch every request travel through the
 pipeline, flip real infrastructure toggles (cache, DB index, queue, rate limiter) and see the p95
 move - or point it at **your own endpoints** and get per-endpoint latency and error numbers.
+
+**Stack:** TypeScript, Fastify, PostgreSQL (1M-row table), Redis, BullMQ, WebSocket metrics stream,
+a single-page vanilla-JS dashboard (no framework, no build step), Docker Compose (one command to run).
+
+**Why it is interesting:** nothing on the dashboard is faked - latencies are measured around real
+HTTP round trips against real Postgres, Redis and BullMQ. The README is also upfront about its
+limits (coordinated omission, shared-machine numbers) in the *Known limitations* section.
 
 ![Lab, live run](docs/screenshots/lab-live.png)
 
