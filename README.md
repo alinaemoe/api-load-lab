@@ -9,14 +9,13 @@ move - or point it at **your own endpoints** and get per-endpoint latency and er
 **Stack:** TypeScript, Fastify, PostgreSQL (1M-row table), Redis, BullMQ, WebSocket metrics stream,
 a single-page vanilla-JS dashboard (no framework, no build step), Docker Compose (one command to run).
 
-**Why it is interesting:** nothing on the dashboard is faked - latencies are measured around real
-HTTP round trips against real Postgres, Redis and BullMQ. The README is also upfront about its
-limits (coordinated omission, shared-machine numbers) in the *Known limitations* section.
+**Why it is interesting:** every latency number on the dashboard is measured around a real HTTP
+round trip against real Postgres, Redis and BullMQ - nothing client-side is simulated. The one
+number that *is* a model is "infra cost" (there's no cloud bill to read locally), and it's labeled
+as such instead of hidden. The README is also upfront about its limits (coordinated omission,
+shared-machine numbers) in the *Known limitations* section.
 
 ![Lab, live run](docs/screenshots/lab-live.png)
-
-Everything on the dashboard is measured from real HTTP round trips against real Postgres, Redis and
-BullMQ. Only the "infra cost" figure is a model (there is no cloud bill to read locally).
 
 ## What you can do
 
@@ -118,6 +117,12 @@ Measured on that stub at 60 rps (constant profile):
 | queue only (5 workers) | ~5 s | capped at ~20 rps, backlog grows |
 | cache + queue | ~3 ms | |
 
+Measured once, on the author's machine, over a ~15 s constant run per row - not a benchmark suite.
+The absolute numbers move with your hardware and Docker's networking (see *Known limitations*);
+the shape of the result - cache cuts latency by roughly two orders of magnitude, an undersized
+queue caps throughput regardless of incoming rate, and a warm cache hides the queue entirely - is
+the point, and it reproduces on every machine it's been run on.
+
 Limits of this mode: **GET only** (responses are cached and replayed), upstream headers are fixed
 per target and not forwarded from clients, cached answers can be up to *TTL* seconds stale, and
 bodies over 1 MB are not forwarded. Your upstream receives real requests from the lab, so the same
@@ -149,7 +154,7 @@ explicitly allowed to test.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| `POST` | `/run/start` | `{ "profile": "spike" }` | Resets cache/queue first (lab mode). |
+| `POST` | `/run/start` | `{ "profile": "spike" }` | Resets cache/queue first (lab mode and lab-proxy mode). |
 | `POST` | `/run/stop` | | |
 | `POST` | `/toggles` | `{ "cache": true, "queue": false, "index": true, "limiter": true }` | Lab mode and lab-proxy mode; forwarded to `target-api`. (`index` only affects the built-in lab.) |
 | `GET/POST` | `/target` | `{ "mode": "lab" }` or `{ "mode": "custom", "baseUrl", "endpoints": [...], "viaProxy": true, "proxyTtlSec": 15, "proxyConcurrency": 5, ... }` | `409` while a run is active, `400` with a message when invalid. |
@@ -169,6 +174,28 @@ cost, breakdown, endpoints[{label, rps, err, drop, p95}], toggles`.
   hits, queue depth and active jobs, rate limiting, index creation, per-endpoint stats.
 - **Simulated:** `cost` / the cost breakdown (a stand-in model for "what would these components cost
   at this throughput"). It is hidden in custom mode.
+
+## What I learned / trade-offs
+
+- **Hand-rolled load generator instead of k6/Locust.** The dashboard needs a per-request outcome
+  the moment it happens (for the particle animation and the per-endpoint table), not a summary
+  after the run ends - so the generator and the UI share a process instead of parsing another
+  tool's output. The cost: no HDR histograms, and percentiles come from a rolling window of the
+  last 400 samples rather than an exact per-second one (see *Known limitations*) - a real gap,
+  called out instead of smoothed over.
+- **The generator drops instead of queueing under overload** (a hard cap on in-flight requests).
+  That's coordinated omission: under heavy saturation the true p99 is worse than what gets shown,
+  because requests that would have queued are simply never sent. Keeping the cap kept the rest of
+  the system much simpler; the honest fix is in *Known limitations*, not in the number itself.
+- **Race mode is sequential (a recorded ghost A), not a live parallel A vs B.** A true side-by-side
+  race needs a second Postgres table/index, a second Redis logical DB and a second queue name, or
+  A's traffic warms B's cache and skews the comparison. Shipping the simpler sequential version and
+  writing down what the parallel one would take (`docs/deferred-parallel-race.md`) felt better than
+  a half-working parallel race.
+- **The lab proxy caches by `path + query` only, with no `Vary` support.** That's enough to answer
+  "what if this GET endpoint had a cache in front of it" - the question it's built for - but it is
+  explicitly not a general-purpose reverse proxy, which is why that scope is spelled out under
+  *Limits of this mode* rather than left implicit.
 
 ## Known limitations
 
